@@ -131,6 +131,23 @@
     <a-form-item v-if="client.email" label='{{ i18n "comment" }}'>
         <a-input v-model.trim="client.comment"></a-input>
     </a-form-item>
+    <a-form-item
+        v-if="inbound.protocol === Protocols.AMNEZIAWG || inbound.protocol === Protocols.NATIVEWG"
+    >
+        <template slot="label">
+            <a-tooltip>
+                <template slot="title">
+                    <span>{{ i18n "pages.inbounds.forwardedPortsDesc" }}</span>
+                </template>
+                {{ i18n "pages.inbounds.forwardedPorts" }}
+                <a-icon type="question-circle"></a-icon>
+            </a-tooltip>
+        </template>
+        <a-input
+            v-model.trim="client.forwardedPorts"
+            placeholder="80, 443; 8000-8100"
+        ></a-input>
+    </a-form-item>
     <a-form-item v-if="app.ipLimitEnable">
         <template slot="label">
             <a-tooltip>

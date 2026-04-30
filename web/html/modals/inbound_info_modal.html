@@ -41,6 +41,15 @@
             <a-tag>[[ dbInbound.port ]]</a-tag>
           </td>
         </tr>
+        <tr v-if="(dbInbound.isAmneziawg || dbInbound.isNativewg) && infoModal.clientSettings">
+          <td>{{ i18n "pages.inbounds.forwardedPorts" }}</td>
+          <td>
+            <a-tag v-if="infoModal.clientSettings.forwardedPorts" color="cyan">
+              [[ infoModal.clientSettings.forwardedPorts ]]
+            </a-tag>
+            <a-tag v-else>{{ i18n "none" }}</a-tag>
+          </td>
+        </tr>
       </table>
     </a-col>
     <a-col :xs="24" :md="12">
@@ -802,6 +811,9 @@
       if (!this.clientSettings.updated_at && peer.updatedAt) {
         this.clientSettings.updated_at = peer.updatedAt;
       }
+      // Always pull the freshest port-forwarding value, since the parent
+      // table snapshot may be stale right after an edit.
+      this.clientSettings.forwardedPorts = peer.forwardedPorts || '';
 
       return peer;
     },

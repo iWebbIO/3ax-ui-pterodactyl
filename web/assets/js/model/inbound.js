@@ -2748,6 +2748,7 @@ Inbound.AmneziawgSettings.AwgPeer = class extends XrayCommonClass {
         subId = '',
         tgId = 0,
         limitIp = 0,
+        forwardedPorts = '',
         _awgId = 0,
         created_at = 0,
         updated_at = 0,
@@ -2763,6 +2764,7 @@ Inbound.AmneziawgSettings.AwgPeer = class extends XrayCommonClass {
         this.subId = subId;
         this.tgId = tgId;
         this.limitIp = limitIp;
+        this.forwardedPorts = forwardedPorts;
         this._awgId = _awgId;
         this.created_at = created_at;
         this.updated_at = updated_at;
@@ -2801,6 +2803,7 @@ Inbound.AmneziawgSettings.AwgPeer = class extends XrayCommonClass {
             json.subId || '',
             json.tgId || 0,
             json.limitIp || 0,
+            json.forwardedPorts || '',
             json._awgId || 0,
             json.created_at || 0,
             json.updated_at || 0,
@@ -2819,6 +2822,7 @@ Inbound.AmneziawgSettings.AwgPeer = class extends XrayCommonClass {
             subId: this.subId,
             tgId: this.tgId,
             limitIp: this.limitIp,
+            forwardedPorts: this.forwardedPorts,
             _awgId: this._awgId,
             created_at: this.created_at,
             updated_at: this.updated_at,
@@ -2856,6 +2860,7 @@ Inbound.NativewgSettings.WgPeer = class extends XrayCommonClass {
         subId = '',
         tgId = 0,
         limitIp = 0,
+        forwardedPorts = '',
         _wgId = 0,
         created_at = 0,
         updated_at = 0,
@@ -2871,6 +2876,7 @@ Inbound.NativewgSettings.WgPeer = class extends XrayCommonClass {
         this.subId = subId;
         this.tgId = tgId;
         this.limitIp = limitIp;
+        this.forwardedPorts = forwardedPorts;
         this._wgId = _wgId;
         this.created_at = created_at;
         this.updated_at = updated_at;
@@ -2909,6 +2915,7 @@ Inbound.NativewgSettings.WgPeer = class extends XrayCommonClass {
             json.subId || '',
             json.tgId || 0,
             json.limitIp || 0,
+            json.forwardedPorts || '',
             json._wgId || 0,
             json.created_at || 0,
             json.updated_at || 0,
@@ -2927,6 +2934,7 @@ Inbound.NativewgSettings.WgPeer = class extends XrayCommonClass {
             subId: this.subId,
             tgId: this.tgId,
             limitIp: this.limitIp,
+            forwardedPorts: this.forwardedPorts,
             _wgId: this._wgId,
             created_at: this.created_at,
             updated_at: this.updated_at,

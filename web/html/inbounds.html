@@ -1342,7 +1342,7 @@
                                         >
                                             <a-table
                                                 :row-key="client => client.id"
-                                                :columns="isMobile ? innerMobileColumns : innerColumns"
+                                                :columns="pickInnerColumns(record, isMobile)"
                                                 :data-source="getInboundClients(record)"
                                                 :pagination="pagination(getInboundClients(record))"
                                                 :style="{ margin: `-10px ${isMobile ? '2px' : '22px'} -11px` }"
@@ -1507,6 +1507,24 @@
         },
     ];
 
+    // Forwarded-ports column shown only inside AWG / native WG inbound peer tables.
+    const forwardedPortsColumn = {
+        title: '{{ i18n "pages.inbounds.forwardedPorts" }}',
+        width: 100,
+        align: "center",
+        scopedSlots: { customRender: "forwardedPorts" },
+    };
+
+    // Insert the forwardedPorts column right after "Client".
+    const innerColumnsWg = (() => {
+        const cols = [...innerColumns];
+        const idx = cols.findIndex(
+            (c) => c.scopedSlots && c.scopedSlots.customRender === "client",
+        );
+        cols.splice(idx + 1, 0, forwardedPortsColumn);
+        return cols;
+    })();
+
     const innerMobileColumns = [
         {
             title: '{{ i18n "pages.inbounds.operate" }}',
@@ -1527,6 +1545,15 @@
             scopedSlots: { customRender: "info" },
         },
     ];
+
+    const innerMobileColumnsWg = (() => {
+        const cols = [...innerMobileColumns];
+        const idx = cols.findIndex(
+            (c) => c.scopedSlots && c.scopedSlots.customRender === "client",
+        );
+        cols.splice(idx + 1, 0, forwardedPortsColumn);
+        return cols;
+    })();
 
     const app = new Vue({
         delimiters: ["[[", "]]"],
@@ -1579,6 +1606,15 @@
         methods: {
             loading(spinning = true) {
                 this.loadingStates.spinning = spinning;
+            },
+            // Returns the column set for an inbound's peer/client table.
+            // AWG and native WG inbounds get an extra "Port forwarding" column.
+            pickInnerColumns(record, mobile) {
+                const isWg = record && (record.isAmneziawg || record.isNativewg);
+                if (mobile) {
+                    return isWg ? innerMobileColumnsWg : innerMobileColumns;
+                }
+                return isWg ? innerColumnsWg : innerColumns;
             },
             async getDBInbounds() {
                 this.refreshing = true;
@@ -1633,6 +1669,7 @@
                                 subId: "",
                                 tgId: c.tgId || 0,
                                 limitIp: c.limitIp || 0,
+                                forwardedPorts: c.forwardedPorts || "",
                                 _wgId: c.id,
                                 created_at: c.createdAt || 0,
                                 updated_at: c.updatedAt || 0,
@@ -1715,6 +1752,7 @@
                                 subId: "",
                                 tgId: c.tgId || 0,
                                 limitIp: c.limitIp || 0,
+                                forwardedPorts: c.forwardedPorts || "",
                                 _awgId: c.id,
                                 created_at: c.createdAt || 0,
                                 updated_at: c.updatedAt || 0,
@@ -2442,6 +2480,7 @@
                         reset: client.reset || 0,
                         limitIp: client.limitIp || 0,
                         tgId: client.tgId || 0,
+                        forwardedPorts: client.forwardedPorts || "",
                     };
                     const msg = await HttpUtil.postJson(
                         "/panel/api/awg/client/add",
@@ -2486,6 +2525,7 @@
                     reset: client.reset || 0,
                     limitIp: client.limitIp || 0,
                     tgId: client.tgId || 0,
+                    forwardedPorts: client.forwardedPorts || "",
                 };
                 const msg = await HttpUtil.postJson(
                     `/panel/api/awg/client/updateByUuid/${encodeURIComponent(clientId)}`,
@@ -2514,6 +2554,7 @@
                         reset: client.reset || 0,
                         limitIp: client.limitIp || 0,
                         tgId: client.tgId || 0,
+                        forwardedPorts: client.forwardedPorts || "",
                     };
                     const msg = await HttpUtil.postJson(
                         "/panel/api/wg/client/add",
@@ -2556,6 +2597,7 @@
                     reset: client.reset || 0,
                     limitIp: client.limitIp || 0,
                     tgId: client.tgId || 0,
+                    forwardedPorts: client.forwardedPorts || "",
                 };
                 const msg = await HttpUtil.postJson(
                     `/panel/api/wg/client/updateByUuid/${encodeURIComponent(clientId)}`,
