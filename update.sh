@@ -9,6 +9,27 @@ plain='\033[0m'
 xui_folder="${XUI_MAIN_FOLDER:=/usr/local/x-ui}"
 xui_service="${XUI_SERVICE:=/etc/systemd/system}"
 
+# Resolve the directory the script lives in. When the script is piped via
+# `bash <(curl ...)` this resolves to /dev/fd/N — the local-source detector
+# below will then find no source files and fall back to GitHub.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
+
+# Returns 0 when update.sh is being run from inside a cloned 3ax-ui git
+# checkout. Mirrors install.sh — see comment there for the BASH_SOURCE
+# safety check.
+is_local_source_install() {
+    local src_name
+    src_name="$(basename "${BASH_SOURCE[0]:-}")"
+    [[ "$src_name" == "update.sh" ]] || return 1
+    [[ -n "$SCRIPT_DIR" ]] || return 1
+    [[ -f "$SCRIPT_DIR/update.sh" ]] || return 1
+    [[ -f "$SCRIPT_DIR/main.go" ]] || return 1
+    [[ -f "$SCRIPT_DIR/go.mod" ]] || return 1
+    [[ -d "$SCRIPT_DIR/web" ]] || return 1
+    [[ -d "$SCRIPT_DIR/.git" ]] || return 1
+    return 0
+}
+
 # Branch to fetch auxiliary files (x-ui.sh, service files) from.
 # --beta / --pre → dev branch; otherwise → main
 if [[ "$1" == "--beta" || "$1" == "--pre" ]]; then
@@ -752,18 +773,281 @@ config_after_update() {
     fi
 }
 
+# Translates the panel's arch label to xray-core's release naming so we can
+# fetch the right Xray-linux-{ARCH}.zip from XTLS/Xray-core releases.
+xray_release_arch() {
+    case "$(arch)" in
+        amd64) echo "64" ;;
+        386) echo "32" ;;
+        arm64) echo "arm64-v8a" ;;
+        armv7) echo "arm32-v7a" ;;
+        armv6) echo "arm32-v6" ;;
+        armv5) echo "arm32-v5" ;;
+        s390x) echo "s390x" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Translates the panel's arch label to the filename the panel uses for the
+# bundled xray binary (panel looks up bin/xray-linux-{FNAME}).
+xray_panel_arch() {
+    case "$(arch)" in
+        amd64) echo "amd64" ;;
+        386) echo "386" ;;
+        arm64) echo "arm64" ;;
+        armv7|armv6|armv5) echo "arm" ;;
+        s390x) echo "s390x" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Downloads xray binary + geo data files into the given target directory.
+# Mirrors the logic in DockerInit.sh — same xray version (v26.3.27), same
+# geo-data sources.
+download_xray_and_geo() {
+    local target_bin_dir="$1"
+    local xray_arch xray_fname xray_url
+    xray_arch=$(xray_release_arch)
+    xray_fname=$(xray_panel_arch)
+    if [[ -z "$xray_arch" || -z "$xray_fname" ]]; then
+        echo -e "${red}No prebuilt xray-core for arch $(arch).${plain}"
+        return 1
+    fi
+    if ! _command_exists unzip; then
+        echo -e "${yellow}Installing unzip (needed to extract xray-core)...${plain}"
+        case "${release}" in
+            ubuntu|debian|armbian) apt-get install -y -q unzip >/dev/null 2>&1 ;;
+            arch|manjaro|parch)    pacman -Sy --noconfirm unzip >/dev/null 2>&1 ;;
+            alpine)                apk add unzip >/dev/null 2>&1 ;;
+            opensuse-tumbleweed)   zypper install -y unzip >/dev/null 2>&1 ;;
+            *)                     dnf install -y -q unzip >/dev/null 2>&1 || yum install -y unzip >/dev/null 2>&1 ;;
+        esac
+    fi
+
+    mkdir -p "$target_bin_dir"
+    local tmp_zip
+    tmp_zip="/tmp/xray-core.$$.zip"
+    xray_url="https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-${xray_arch}.zip"
+    echo -e "${green}Downloading xray-core ${xray_url}...${plain}"
+    if ! ${curl_bin} -4fLRo "$tmp_zip" "$xray_url"; then
+        rm -f "$tmp_zip"
+        echo -e "${red}Failed to download xray-core.${plain}"
+        return 1
+    fi
+    (cd "$target_bin_dir" && unzip -o "$tmp_zip" >/dev/null) || {
+        rm -f "$tmp_zip"
+        echo -e "${red}Failed to unzip xray-core.${plain}"
+        return 1
+    }
+    rm -f "$tmp_zip"
+    rm -f "$target_bin_dir/geoip.dat" "$target_bin_dir/geosite.dat"
+    if [[ -f "$target_bin_dir/xray" ]]; then
+        mv -f "$target_bin_dir/xray" "$target_bin_dir/xray-linux-${xray_fname}"
+        chmod +x "$target_bin_dir/xray-linux-${xray_fname}"
+    fi
+
+    echo -e "${green}Downloading geo data...${plain}"
+    ${curl_bin} -4sfLRo "$target_bin_dir/geoip.dat"     https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
+    ${curl_bin} -4sfLRo "$target_bin_dir/geosite.dat"   https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
+    ${curl_bin} -4sfLRo "$target_bin_dir/geoip_IR.dat"   https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geoip.dat
+    ${curl_bin} -4sfLRo "$target_bin_dir/geosite_IR.dat" https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geosite.dat
+    ${curl_bin} -4sfLRo "$target_bin_dir/geoip_RU.dat"   https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat
+    ${curl_bin} -4sfLRo "$target_bin_dir/geosite_RU.dat" https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+    return 0
+}
+
+# Ensures a Go toolchain ≥ 1.21 is on PATH. With Go ≥ 1.21 the GOTOOLCHAIN=auto
+# default makes `go build` self-bootstrap the version pinned in go.mod, so we
+# only need a recent-enough bootstrap here.
+ensure_go() {
+    local need_install=1
+    if _command_exists go; then
+        local v
+        v=$(go env GOVERSION 2>/dev/null | sed -E 's/^go//')
+        if [[ -n "$v" ]]; then
+            local min_version="1.21.0"
+            if [[ "$(printf '%s\n' "$min_version" "$v" | sort -V | head -n1)" == "$min_version" ]]; then
+                need_install=0
+            fi
+        fi
+    fi
+
+    if [[ $need_install -eq 0 ]]; then
+        echo -e "${green}Existing Go toolchain detected: $(go env GOVERSION 2>/dev/null)${plain}"
+        return 0
+    fi
+
+    local goarch
+    case "$(arch)" in
+        amd64)        goarch="amd64" ;;
+        386)          goarch="386" ;;
+        arm64)        goarch="arm64" ;;
+        armv6|armv7)  goarch="armv6l" ;;
+        s390x)        goarch="s390x" ;;
+        *)
+            echo -e "${red}No prebuilt Go binary for arch $(arch).${plain}"
+            return 1
+            ;;
+    esac
+
+    local go_version="1.26.2"
+    local go_url="https://go.dev/dl/go${go_version}.linux-${goarch}.tar.gz"
+    local tmp_tgz
+    tmp_tgz="/tmp/go-bootstrap.$$.tar.gz"
+
+    echo -e "${green}Installing Go ${go_version} from ${go_url}...${plain}"
+    if ! ${curl_bin} -4fLRo "$tmp_tgz" "$go_url"; then
+        rm -f "$tmp_tgz"
+        echo -e "${red}Failed to download Go ${go_version}.${plain}"
+        return 1
+    fi
+    rm -rf /usr/local/go
+    if ! tar -C /usr/local -xzf "$tmp_tgz"; then
+        rm -f "$tmp_tgz"
+        echo -e "${red}Failed to extract Go ${go_version}.${plain}"
+        return 1
+    fi
+    rm -f "$tmp_tgz"
+    export PATH="/usr/local/go/bin:$PATH"
+    if ! _command_exists go; then
+        echo -e "${red}Go installed but not on PATH.${plain}"
+        return 1
+    fi
+    echo -e "${green}Go installed: $(go version)${plain}"
+    return 0
+}
+
+# Builds the panel binary from the local source tree and assembles the same
+# directory layout the GitHub release tarball would extract into. After this
+# returns successfully, update_x-ui's existing post-extract logic (chmod,
+# service install, etc.) takes over unchanged with CWD = ${xui_folder}.
+update_x-ui_from_source() {
+    echo -e "${green}Local source detected at ${SCRIPT_DIR} — building from source...${plain}"
+    if ! ensure_go; then
+        echo -e "${yellow}Falling back to GitHub release download.${plain}"
+        return 1
+    fi
+
+    local build_version
+    build_version=$(cd "$SCRIPT_DIR" && git describe --tags --always --dirty 2>/dev/null)
+    if [[ -z "$build_version" ]]; then
+        build_version="v$(cat "$SCRIPT_DIR/config/version" 2>/dev/null || echo unknown)"
+    fi
+    echo -e "${green}Building x-ui (version ${build_version})...${plain}"
+
+    (cd "$SCRIPT_DIR" && \
+     GOTOOLCHAIN=auto CGO_ENABLED=1 go build \
+         -ldflags "-w -s -X 'github.com/coinman-dev/3ax-ui/v2/config.version=${build_version}'" \
+         -o "$SCRIPT_DIR/build/x-ui" main.go) || {
+        echo -e "${red}go build failed — falling back to GitHub release.${plain}"
+        return 1
+    }
+
+    rm -rf "${xui_folder}"
+    mkdir -p "${xui_folder}/bin"
+    cp -f "$SCRIPT_DIR/build/x-ui"           "${xui_folder}/x-ui"
+    cp -f "$SCRIPT_DIR/x-ui.sh"              "${xui_folder}/x-ui.sh"
+    [[ -f "$SCRIPT_DIR/x-ui.service.debian" ]] && cp -f "$SCRIPT_DIR/x-ui.service.debian" "${xui_folder}/"
+    [[ -f "$SCRIPT_DIR/x-ui.service.arch"   ]] && cp -f "$SCRIPT_DIR/x-ui.service.arch"   "${xui_folder}/"
+    [[ -f "$SCRIPT_DIR/x-ui.service.rhel"   ]] && cp -f "$SCRIPT_DIR/x-ui.service.rhel"   "${xui_folder}/"
+    [[ -f "$SCRIPT_DIR/x-ui.rc"             ]] && cp -f "$SCRIPT_DIR/x-ui.rc"             "${xui_folder}/"
+
+    local panel_fname
+    panel_fname=$(xray_panel_arch)
+    if [[ -n "$panel_fname" && -f "$SCRIPT_DIR/build/bin/xray-linux-${panel_fname}" ]]; then
+        echo -e "${green}Reusing existing build/bin/xray-linux-${panel_fname} and geo data.${plain}"
+        cp -f "$SCRIPT_DIR/build/bin/"* "${xui_folder}/bin/" 2>/dev/null || true
+    elif [[ -n "$panel_fname" && -f "$SCRIPT_DIR/target/bin/xray-linux-${panel_fname}" ]]; then
+        echo -e "${green}Reusing existing target/bin/xray-linux-${panel_fname} and geo data.${plain}"
+        cp -f "$SCRIPT_DIR/target/bin/"* "${xui_folder}/bin/" 2>/dev/null || true
+    else
+        if ! download_xray_and_geo "${xui_folder}/bin"; then
+            echo -e "${red}Failed to fetch xray-core for the local-source update.${plain}"
+            return 1
+        fi
+    fi
+
+    tag_version="${build_version}"
+    return 0
+}
+
 update_x-ui() {
     cd ${xui_folder%/x-ui}/
     local xray_backup=""
     local xray_backup_name=""
-    
+
     if [ -f "${xui_folder}/x-ui" ]; then
         current_xui_version=$(${xui_folder}/x-ui -v)
         echo -e "${green}Current x-ui version: ${current_xui_version}${plain}"
     else
         _fail "ERROR: Current x-ui version: unknown"
     fi
-    
+
+    # Local-source update path — build from cloned repo, skip the GitHub
+    # download. Mirrors the GitHub-release flow's pre-/post-install hooks
+    # (xray binary preservation, service-unit reinstall, x-ui.sh reinstall,
+    # owner / permission fixups, config_after_update).
+    if is_local_source_install; then
+        echo -e "${green}Preserving xray binary before update...${plain}"
+        if [[ -e ${xui_folder}/ ]]; then
+            for candidate in "${xui_folder}"/bin/xray-linux-*; do
+                if [[ -f "$candidate" ]]; then
+                    xray_backup_name=$(basename "$candidate")
+                    xray_backup="/tmp/${xray_backup_name}.xui-update.$$"
+                    if cp -f "$candidate" "$xray_backup" >/dev/null 2>&1; then
+                        echo -e "${green}Preserving existing Xray core binary: ${xray_backup_name}${plain}"
+                    else
+                        xray_backup=""
+                        xray_backup_name=""
+                    fi
+                    break
+                fi
+            done
+
+            echo -e "${green}Stopping x-ui...${plain}"
+            if [[ $release == "alpine" ]]; then
+                rc-service x-ui stop >/dev/null 2>&1
+                rc-update del x-ui >/dev/null 2>&1
+                rm -f /etc/init.d/x-ui >/dev/null 2>&1
+            else
+                systemctl stop x-ui >/dev/null 2>&1
+                systemctl disable x-ui >/dev/null 2>&1
+                rm ${xui_service}/x-ui.service -f >/dev/null 2>&1
+                systemctl daemon-reload >/dev/null 2>&1
+            fi
+        fi
+
+        if update_x-ui_from_source; then
+            cd "${xui_folder}" >/dev/null 2>&1
+            chmod +x x-ui >/dev/null 2>&1
+            if [[ $(arch) == "armv5" || $(arch) == "armv6" || $(arch) == "armv7" ]]; then
+                mv bin/xray-linux-$(arch) bin/xray-linux-arm >/dev/null 2>&1
+                chmod +x bin/xray-linux-arm >/dev/null 2>&1
+            fi
+            chmod +x x-ui >/dev/null 2>&1
+            [ -f bin/xray-linux-$(arch) ] && chmod +x bin/xray-linux-$(arch) >/dev/null 2>&1
+            if [[ -n "$xray_backup" && -n "$xray_backup_name" && -f "$xray_backup" ]]; then
+                cp -f "$xray_backup" "bin/${xray_backup_name}" >/dev/null 2>&1 && \
+                    chmod +x "bin/${xray_backup_name}" >/dev/null 2>&1
+                rm -f "$xray_backup" >/dev/null 2>&1
+            fi
+
+            cp -f "${xui_folder}/x-ui.sh" /usr/bin/x-ui >/dev/null 2>&1
+            chmod +x ${xui_folder}/x-ui.sh >/dev/null 2>&1
+            chmod +x /usr/bin/x-ui >/dev/null 2>&1
+            mkdir -p /var/log/x-ui >/dev/null 2>&1
+            chown -R root:root ${xui_folder} >/dev/null 2>&1
+            [ -f "${xui_folder}/bin/config.json" ] && chmod 640 ${xui_folder}/bin/config.json >/dev/null 2>&1
+
+            update_x-ui_install_service
+            config_after_update
+            update_x-ui_print_footer
+            return
+        fi
+        echo -e "${yellow}Local-source update did not complete — falling back to GitHub release.${plain}"
+        # Fall through to the GitHub-release flow.
+    fi
+
     echo -e "${green}Downloading new x-ui version...${plain}"
 
     if [[ "$1" == "--beta" || "$1" == "--pre" ]]; then
@@ -897,89 +1181,83 @@ update_x-ui() {
         chmod 640 ${xui_folder}/bin/config.json >/dev/null 2>&1
     fi
     
+    update_x-ui_install_service
+    config_after_update
+    update_x-ui_print_footer
+}
+
+# Installs and starts the OS service unit during update. Prefers files
+# embedded in ${xui_folder}/ (delivered both by the release tarball and by
+# the local-source build); falls back to GitHub raw if missing.
+update_x-ui_install_service() {
     if [[ $release == "alpine" ]]; then
-        echo -e "${green}Downloading and installing startup unit x-ui.rc...${plain}"
-        ${curl_bin} -fLRo /etc/init.d/x-ui https://raw.githubusercontent.com/coinman-dev/3ax-ui/${REPO_BRANCH}/x-ui.rc >/dev/null 2>&1
-        if [[ $? -ne 0 ]]; then
-            ${curl_bin} -4fLRo /etc/init.d/x-ui https://raw.githubusercontent.com/coinman-dev/3ax-ui/${REPO_BRANCH}/x-ui.rc >/dev/null 2>&1
+        if [ -f "${xui_folder}/x-ui.rc" ]; then
+            cp -f "${xui_folder}/x-ui.rc" /etc/init.d/x-ui >/dev/null 2>&1
+        else
+            ${curl_bin} -fLRo /etc/init.d/x-ui https://raw.githubusercontent.com/coinman-dev/3ax-ui/${REPO_BRANCH}/x-ui.rc >/dev/null 2>&1
             if [[ $? -ne 0 ]]; then
-                _fail "ERROR: Failed to download startup unit x-ui.rc, please be sure that your server can access GitHub"
+                ${curl_bin} -4fLRo /etc/init.d/x-ui https://raw.githubusercontent.com/coinman-dev/3ax-ui/${REPO_BRANCH}/x-ui.rc >/dev/null 2>&1
+                [[ $? -ne 0 ]] && _fail "ERROR: Failed to download startup unit x-ui.rc"
             fi
         fi
         chmod +x /etc/init.d/x-ui >/dev/null 2>&1
         chown root:root /etc/init.d/x-ui >/dev/null 2>&1
         rc-update add x-ui >/dev/null 2>&1
         rc-service x-ui start >/dev/null 2>&1
-    else
-        if [ -f "x-ui.service" ]; then
-            echo -e "${green}Installing systemd unit...${plain}"
-            cp -f x-ui.service ${xui_service}/ >/dev/null 2>&1
-            if [[ $? -ne 0 ]]; then
-                echo -e "${red}Failed to copy x-ui.service${plain}"
-                exit 1
-            fi
-        else
-            service_installed=false
-            case "${release}" in
-                ubuntu | debian | armbian)
-                    if [ -f "x-ui.service.debian" ]; then
-                        echo -e "${green}Installing debian-like systemd unit...${plain}"
-                        cp -f x-ui.service.debian ${xui_service}/x-ui.service >/dev/null 2>&1
-                        if [[ $? -eq 0 ]]; then
-                            service_installed=true
-                        fi
-                    fi
-                ;;
-                arch | manjaro | parch)
-                    if [ -f "x-ui.service.arch" ]; then
-                        echo -e "${green}Installing arch-like systemd unit...${plain}"
-                        cp -f x-ui.service.arch ${xui_service}/x-ui.service >/dev/null 2>&1
-                        if [[ $? -eq 0 ]]; then
-                            service_installed=true
-                        fi
-                    fi
-                ;;
-                *)
-                    if [ -f "x-ui.service.rhel" ]; then
-                        echo -e "${green}Installing rhel-like systemd unit...${plain}"
-                        cp -f x-ui.service.rhel ${xui_service}/x-ui.service >/dev/null 2>&1
-                        if [[ $? -eq 0 ]]; then
-                            service_installed=true
-                        fi
-                    fi
-                ;;
-            esac
-            
-            # If service file not found in tar.gz, download from GitHub
-            if [ "$service_installed" = false ]; then
-                echo -e "${yellow}Service files not found in tar.gz, downloading from GitHub...${plain}"
-                case "${release}" in
-                    ubuntu | debian | armbian)
-                        ${curl_bin} -4fLRo ${xui_service}/x-ui.service https://raw.githubusercontent.com/coinman-dev/3ax-ui/${REPO_BRANCH}/x-ui.service.debian >/dev/null 2>&1
-                    ;;
-                    arch | manjaro | parch)
-                        ${curl_bin} -4fLRo ${xui_service}/x-ui.service https://raw.githubusercontent.com/coinman-dev/3ax-ui/${REPO_BRANCH}/x-ui.service.arch >/dev/null 2>&1
-                    ;;
-                    *)
-                        ${curl_bin} -4fLRo ${xui_service}/x-ui.service https://raw.githubusercontent.com/coinman-dev/3ax-ui/${REPO_BRANCH}/x-ui.service.rhel >/dev/null 2>&1
-                    ;;
-                esac
-                
-                if [[ $? -ne 0 ]]; then
-                    echo -e "${red}Failed to install x-ui.service from GitHub${plain}"
-                    exit 1
-                fi
-            fi
-        fi
-        chown root:root ${xui_service}/x-ui.service >/dev/null 2>&1
-        chmod 644 ${xui_service}/x-ui.service >/dev/null 2>&1
-        systemctl daemon-reload >/dev/null 2>&1
-        systemctl enable x-ui >/dev/null 2>&1
-        systemctl start x-ui >/dev/null 2>&1
+        return
     fi
-    
-    config_after_update
-    
+
+    # systemd path
+    local service_installed=false
+    if [ -f "${xui_folder}/x-ui.service" ]; then
+        echo -e "${green}Installing systemd unit...${plain}"
+        cp -f "${xui_folder}/x-ui.service" ${xui_service}/ >/dev/null 2>&1 && service_installed=true
+    fi
+    if [ "$service_installed" = false ]; then
+        case "${release}" in
+            ubuntu | debian | armbian)
+                if [ -f "${xui_folder}/x-ui.service.debian" ]; then
+                    echo -e "${green}Installing debian-like systemd unit...${plain}"
+                    cp -f "${xui_folder}/x-ui.service.debian" ${xui_service}/x-ui.service >/dev/null 2>&1 && service_installed=true
+                fi
+            ;;
+            arch | manjaro | parch)
+                if [ -f "${xui_folder}/x-ui.service.arch" ]; then
+                    echo -e "${green}Installing arch-like systemd unit...${plain}"
+                    cp -f "${xui_folder}/x-ui.service.arch" ${xui_service}/x-ui.service >/dev/null 2>&1 && service_installed=true
+                fi
+            ;;
+            *)
+                if [ -f "${xui_folder}/x-ui.service.rhel" ]; then
+                    echo -e "${green}Installing rhel-like systemd unit...${plain}"
+                    cp -f "${xui_folder}/x-ui.service.rhel" ${xui_service}/x-ui.service >/dev/null 2>&1 && service_installed=true
+                fi
+            ;;
+        esac
+    fi
+    if [ "$service_installed" = false ]; then
+        echo -e "${yellow}Service files not found locally, downloading from GitHub...${plain}"
+        case "${release}" in
+            ubuntu | debian | armbian)
+                ${curl_bin} -4fLRo ${xui_service}/x-ui.service https://raw.githubusercontent.com/coinman-dev/3ax-ui/${REPO_BRANCH}/x-ui.service.debian >/dev/null 2>&1
+            ;;
+            arch | manjaro | parch)
+                ${curl_bin} -4fLRo ${xui_service}/x-ui.service https://raw.githubusercontent.com/coinman-dev/3ax-ui/${REPO_BRANCH}/x-ui.service.arch >/dev/null 2>&1
+            ;;
+            *)
+                ${curl_bin} -4fLRo ${xui_service}/x-ui.service https://raw.githubusercontent.com/coinman-dev/3ax-ui/${REPO_BRANCH}/x-ui.service.rhel >/dev/null 2>&1
+            ;;
+        esac
+        [[ $? -ne 0 ]] && _fail "ERROR: Failed to install x-ui.service from GitHub"
+    fi
+    chown root:root ${xui_service}/x-ui.service >/dev/null 2>&1
+    chmod 644 ${xui_service}/x-ui.service >/dev/null 2>&1
+    systemctl daemon-reload >/dev/null 2>&1
+    systemctl enable x-ui >/dev/null 2>&1
+    systemctl start x-ui >/dev/null 2>&1
+}
+
+update_x-ui_print_footer() {
     echo -e "${green}x-ui ${tag_version}${plain} updating finished, it is running now..."
     echo -e ""
     echo -e "┌───────────────────────────────────────────────────────┐
