@@ -23,7 +23,20 @@ const (
 	WireGuard   Protocol = "wireguard"
 	AmneziaWG   Protocol = "amneziawg"
 	NativeWG    Protocol = "nativewg"
+	// UI stores Hysteria v1 and v2 both as "hysteria" and uses
+	// settings.version to discriminate. Imports from outside the panel
+	// can carry the literal "hysteria2" string, so IsHysteria below
+	// accepts both.
+	Hysteria  Protocol = "hysteria"
+	Hysteria2 Protocol = "hysteria2"
 )
+
+// IsHysteria returns true for both "hysteria" and "hysteria2".
+// Use instead of a bare ==model.Hysteria check: a v2 inbound stored
+// with the literal v2 string would otherwise fall through (#4081).
+func IsHysteria(p Protocol) bool {
+	return p == Hysteria || p == Hysteria2
+}
 
 // User represents a user account in the 3AX-UI panel.
 type User struct {
@@ -106,21 +119,39 @@ type Setting struct {
 	Value string `json:"value" form:"value"`
 }
 
+type CustomGeoResource struct {
+	Id            int    `json:"id" gorm:"primaryKey;autoIncrement"`
+	Type          string `json:"type" gorm:"not null;uniqueIndex:idx_custom_geo_type_alias;column:geo_type"`
+	Alias         string `json:"alias" gorm:"not null;uniqueIndex:idx_custom_geo_type_alias"`
+	Url           string `json:"url" gorm:"not null"`
+	LocalPath     string `json:"localPath" gorm:"column:local_path"`
+	LastUpdatedAt int64  `json:"lastUpdatedAt" gorm:"default:0;column:last_updated_at"`
+	LastModified  string `json:"lastModified" gorm:"column:last_modified"`
+	CreatedAt     int64  `json:"createdAt" gorm:"autoCreateTime;column:created_at"`
+	UpdatedAt     int64  `json:"updatedAt" gorm:"autoUpdateTime;column:updated_at"`
+}
+
+type ClientReverse struct {
+	Tag string `json:"tag"`
+}
+
 // Client represents a client configuration for Xray inbounds with traffic limits and settings.
 type Client struct {
-	ID         string `json:"id"`                           // Unique client identifier
-	Security   string `json:"security"`                     // Security method (e.g., "auto", "aes-128-gcm")
-	Password   string `json:"password"`                     // Client password
-	Flow       string `json:"flow"`                         // Flow control (XTLS)
-	Email      string `json:"email"`                        // Client email identifier
-	LimitIP    int    `json:"limitIp"`                      // IP limit for this client
-	TotalGB    int64  `json:"totalGB" form:"totalGB"`       // Total traffic limit in GB
-	ExpiryTime int64  `json:"expiryTime" form:"expiryTime"` // Expiration timestamp
-	Enable     bool   `json:"enable" form:"enable"`         // Whether the client is enabled
-	TgID       int64  `json:"tgId" form:"tgId"`             // Telegram user ID for notifications
-	SubID      string `json:"subId" form:"subId"`           // Subscription identifier
-	Comment    string `json:"comment" form:"comment"`       // Client comment
-	Reset      int    `json:"reset" form:"reset"`           // Reset period in days
-	CreatedAt  int64  `json:"created_at,omitempty"`         // Creation timestamp
-	UpdatedAt  int64  `json:"updated_at,omitempty"`         // Last update timestamp
+	ID         string         `json:"id,omitempty"`                 // Unique client identifier
+	Security   string         `json:"security"`                     // Security method (e.g., "auto", "aes-128-gcm")
+	Password   string         `json:"password,omitempty"`           // Client password
+	Flow       string         `json:"flow,omitempty"`               // Flow control (XTLS)
+	Reverse    *ClientReverse `json:"reverse,omitempty"`            // VLESS simple reverse proxy settings
+	Auth       string         `json:"auth,omitempty"`               // Auth password (Hysteria)
+	Email      string         `json:"email"`                        // Client email identifier
+	LimitIP    int            `json:"limitIp"`                      // IP limit for this client
+	TotalGB    int64          `json:"totalGB" form:"totalGB"`       // Total traffic limit in GB
+	ExpiryTime int64          `json:"expiryTime" form:"expiryTime"` // Expiration timestamp
+	Enable     bool           `json:"enable" form:"enable"`         // Whether the client is enabled
+	TgID       int64          `json:"tgId" form:"tgId"`             // Telegram user ID for notifications
+	SubID      string         `json:"subId" form:"subId"`           // Subscription identifier
+	Comment    string         `json:"comment" form:"comment"`       // Client comment
+	Reset      int            `json:"reset" form:"reset"`           // Reset period in days
+	CreatedAt  int64          `json:"created_at,omitempty"`         // Creation timestamp
+	UpdatedAt  int64          `json:"updated_at,omitempty"`         // Last update timestamp
 }

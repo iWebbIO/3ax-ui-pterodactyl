@@ -13,7 +13,7 @@
     cancel-text='{{ i18n "close" }}'
     :ok-button-props="{ props: { disabled: (!inModal.isEdit && inbound.protocol === Protocols.AMNEZIAWG && app.dbInbounds && app.dbInbounds.some(db => db.protocol === Protocols.AMNEZIAWG)) || (!inModal.isEdit && inbound.protocol === Protocols.NATIVEWG && app.dbInbounds && app.dbInbounds.some(db => db.protocol === Protocols.NATIVEWG)) } }"
 >
-    {{template "form/inbound"}}
+    {{template "form/inbound" .}}
 </a-modal>
 <script>
     // Make inModal globally available to ensure it works with any base path
@@ -241,6 +241,9 @@
                         client.flow = "";
                     });
                 }
+                if (inModal.inbound.stream.network != "kcp") {
+                    inModal.inbound.stream.finalmask.udp = [];
+                }
             },
             SSMethodChange() {
                 this.inModal.inbound.settings.password =
@@ -353,6 +356,12 @@
                 this.inbound.stream.tls.settings.echConfigList = "";
             },
             async getNewVlessEnc() {
+                const selected = inModal.inbound.settings.selectedAuth;
+                if (!selected) {
+                    this.clearVlessEnc();
+                    return;
+                }
+
                 inModal.loading(true);
                 const msg = await HttpUtil.get(
                     "/panel/api/server/getNewVlessEnc",
@@ -364,7 +373,6 @@
                 }
 
                 const auths = msg.obj.auths || [];
-                const selected = inModal.inbound.settings.selectedAuth;
                 const block = auths.find((a) => a.label === selected);
 
                 if (!block) {

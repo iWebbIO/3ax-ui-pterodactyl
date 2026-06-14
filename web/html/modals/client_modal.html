@@ -19,7 +19,7 @@
             >Account is (Expired|Traffic Ended) And Disabled</a-tag
         >
     </template>
-    {{template "form/client"}}
+    {{template "form/client" .}}
 </a-modal>
 <script>
     const clientModal = {
@@ -65,7 +65,7 @@
             this.okText = okText;
             this.isEdit = isEdit;
             this.dbInbound = new DBInbound(dbInbound);
-            this.inbound = dbInbound.toInbound();
+            this.inbound = Inbound.fromJson(dbInbound.toInbound().toJson());
             this.clients = this.inbound.clients;
             this.index = index === null ? this.clients.length : index;
             this.delayedStart = false;
@@ -127,6 +127,8 @@
                 case Protocols.AMNEZIAWG:
                 case Protocols.NATIVEWG:
                     return client.id || "";
+                case Protocols.HYSTERIA:
+                    return client.auth;
                 default:
                     return client.id;
             }
@@ -162,6 +164,8 @@
                     return clients.push(
                         new Inbound.HttpSettings.HttpClient(),
                     );
+                case Protocols.HYSTERIA:
+                    return clients.push(new Inbound.HysteriaSettings.Hysteria());
                 default:
                     return null;
             }

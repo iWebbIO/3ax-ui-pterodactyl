@@ -107,7 +107,16 @@ class DBInbound {
         return this.expiryTime < new Date().getTime();
     }
 
+    invalidateCache() {
+        this._cachedInbound = null;
+        this._clientStatsMap = null;
+    }
+
     toInbound() {
+        if (this._cachedInbound) {
+            return this._cachedInbound;
+        }
+
         let settings = {};
         if (!ObjectUtil.isEmpty(this.settings)) {
             settings = JSON.parse(this.settings);
@@ -133,7 +142,21 @@ class DBInbound {
             sniffing: sniffing,
             clientStats: this.clientStats,
         };
-        return Inbound.fromJson(config);
+
+        this._cachedInbound = Inbound.fromJson(config);
+        return this._cachedInbound;
+    }
+
+    getClientStats(email) {
+        if (!this._clientStatsMap) {
+            this._clientStatsMap = new Map();
+            if (this.clientStats && Array.isArray(this.clientStats)) {
+                for (const stats of this.clientStats) {
+                    this._clientStatsMap.set(stats.email, stats);
+                }
+            }
+        }
+        return this._clientStatsMap.get(email);
     }
 
     isMultiUser() {
@@ -145,6 +168,7 @@ class DBInbound {
             case Protocols.NATIVEWG:
             case Protocols.MIXED:
             case Protocols.HTTP:
+            case Protocols.HYSTERIA:
                 return true;
             case Protocols.SHADOWSOCKS:
                 return this.toInbound().isSSMultiUser;
@@ -159,6 +183,7 @@ class DBInbound {
             case Protocols.VLESS:
             case Protocols.TROJAN:
             case Protocols.SHADOWSOCKS:
+            case Protocols.HYSTERIA:
                 return true;
             default:
                 return false;
