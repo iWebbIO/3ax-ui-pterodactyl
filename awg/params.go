@@ -111,7 +111,7 @@ func generateHRanges() [4]string {
 }
 
 // hMaxValid is the largest accepted H value: uint32 max, the kernel's limit.
-const hMaxValid = 4294967295
+const hMaxValid int64 = 4294967295
 
 // ValidateObfuscation rejects malformed obfuscation parameters before they are
 // saved and applied, so a bad manual entry can't bring the interface down on
@@ -143,8 +143,8 @@ func validateHValue(v string) error {
 		return nil
 	}
 	if lo, hi, isRange := strings.Cut(v, "-"); isRange {
-		l, err1 := strconv.Atoi(strings.TrimSpace(lo))
-		h, err2 := strconv.Atoi(strings.TrimSpace(hi))
+		l, err1 := strconv.ParseInt(strings.TrimSpace(lo), 10, 64)
+		h, err2 := strconv.ParseInt(strings.TrimSpace(hi), 10, 64)
 		if err1 != nil || err2 != nil {
 			return fmt.Errorf("range %q must be two integers", v)
 		}
@@ -153,7 +153,7 @@ func validateHValue(v string) error {
 		}
 		return nil
 	}
-	n, err := strconv.Atoi(v)
+	n, err := strconv.ParseInt(v, 10, 64)
 	if err != nil || n < 0 || n > hMaxValid {
 		return fmt.Errorf("value %q must be an integer in 0..%d or a low-high range", v, hMaxValid)
 	}
