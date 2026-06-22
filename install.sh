@@ -1310,7 +1310,7 @@ print(str(first) + '/' + str(net.prefixlen))
         ipv4_address, ipv4_pool,
         ipv6_enabled, ipv6_address, ipv6_pool, ipv6_gateway,
         jc, jmin, jmax, s1, s2, h1, h2, h3, h4,
-        dns, external_interface, ipv6_external_interface,
+        dns_ipv4, dns_ipv6, external_interface, ipv6_external_interface,
         post_up, post_down, endpoint,
         created_at, updated_at
     ) VALUES (
@@ -1319,13 +1319,16 @@ print(str(first) + '/' + str(net.prefixlen))
         '10.66.66.1/24', '10.66.66.0/24',
         ${ipv6_enabled}, '${awg_server_ipv6:-}', '${ipv6_prefix:-}', '${ipv6_gateway:-}',
         4, 50, 1000, 0, 0, 1, 2, 3, 4,
-        '1.1.1.1,2606:4700:4700::1111', '${ipv4_iface}', '${ipv6_iface}',
+        '1.1.1.1', '2606:4700:4700::1111', '${ipv4_iface}', '${ipv6_iface}',
         '', '', '${endpoint}',
         ${now_ms}, ${now_ms}
     );" 2>/dev/null
 
     if [[ $? -eq 0 ]]; then
         echo -e "${green}AmneziaWG configured successfully!${plain}"
+        # Fresh install only (this whole block is skipped when a server already
+        # exists), so default new setups to AmneziaWG 2.0 obfuscation.
+        ${xui_folder}/x-ui awg-gen2 >/dev/null 2>&1 && echo -e "${green}  AmneziaWG 2.0 obfuscation parameters generated.${plain}"
         echo -e ""
         echo -e "${green}═══════════════════════════════════════════${plain}"
         echo -e "  Interface:    awg0"
@@ -1530,7 +1533,7 @@ print(str(first) + '/' + str(net.prefixlen))
         private_key, public_key,
         ipv4_address, ipv4_pool,
         ipv6_enabled, ipv6_address, ipv6_pool, ipv6_gateway,
-        dns, external_interface, ipv6_external_interface,
+        dns_ipv4, dns_ipv6, external_interface, ipv6_external_interface,
         post_up, post_down, endpoint,
         created_at, updated_at
     ) VALUES (
@@ -1538,7 +1541,7 @@ print(str(first) + '/' + str(net.prefixlen))
         '${server_privkey}', '${server_pubkey}',
         '10.77.77.1/24', '10.77.77.0/24',
         ${ipv6_enabled}, '${wg_server_ipv6:-}', '${ipv6_prefix:-}', '${ipv6_gateway:-}',
-        '1.1.1.1,2606:4700:4700::1111', '${ipv4_iface}', '${ipv6_iface}',
+        '1.1.1.1', '2606:4700:4700::1111', '${ipv4_iface}', '${ipv6_iface}',
         '', '', '${endpoint}',
         ${now_ms}, ${now_ms}
     );" 2>/dev/null
@@ -2106,7 +2109,41 @@ prompt_debug_mode() {
     esac
 }
 
+check_existing_install() {
+    # If 3AX-UI is already installed, offer to update instead of reinstalling
+    # over the top (running the installer again otherwise stops the panel and
+    # overwrites the binary). Default (Enter) switches to the update script.
+    if [[ -f /usr/bin/x-ui || -f "${xui_folder}/x-ui" ]]; then
+        echo -e "${yellow}3AX-UI is already installed on this system.${plain}"
+        echo -e "Running the installer again stops the panel and overwrites the binary."
+        echo -e "  ${green}1)${plain} Update to the latest version (update.sh) — recommended"
+        echo -e "  ${green}2)${plain} Reinstall over the existing installation"
+        echo -e "  ${green}3)${plain} Cancel"
+        echo -ne "Choose [1-3, default 1]: "
+        read -r __install_choice
+        case "${__install_choice:-1}" in
+            2)
+                echo -e "${yellow}Proceeding with reinstall over the existing installation.${plain}"
+                ;;
+            3)
+                echo -e "${yellow}Cancelled.${plain}"
+                exit 0
+                ;;
+            *)
+                echo -e "${green}Switching to the update script...${plain}"
+                if is_local_source_install && [[ -f ./update.sh ]]; then
+                    bash ./update.sh
+                else
+                    bash <(curl -Ls "https://raw.githubusercontent.com/coinman-dev/3ax-ui/${REPO_BRANCH:-main}/update.sh")
+                fi
+                exit $?
+                ;;
+        esac
+    fi
+}
+
 echo -e "${green}Running...${plain}"
+check_existing_install
 prompt_debug_mode
 install_base
 install_amneziawg

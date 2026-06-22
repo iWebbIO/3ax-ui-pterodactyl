@@ -18,11 +18,16 @@ class AwgServer {
         this.jmax = data.jmax !== undefined ? data.jmax : 1000;
         this.s1 = data.s1 !== undefined ? data.s1 : 0;
         this.s2 = data.s2 !== undefined ? data.s2 : 0;
-        this.h1 = data.h1 !== undefined ? data.h1 : 1;
-        this.h2 = data.h2 !== undefined ? data.h2 : 2;
-        this.h3 = data.h3 !== undefined ? data.h3 : 3;
-        this.h4 = data.h4 !== undefined ? data.h4 : 4;
-        this.dns = data.dns || '1.1.1.1,2606:4700:4700::1111';
+        this.s3 = data.s3 !== undefined ? data.s3 : 0;
+        this.s4 = data.s4 !== undefined ? data.s4 : 0;
+        // H1-H4 are strings: a single value ("1") for 1.x or a "low-high" range for 2.0.
+        this.h1 = data.h1 !== undefined ? String(data.h1) : '1';
+        this.h2 = data.h2 !== undefined ? String(data.h2) : '2';
+        this.h3 = data.h3 !== undefined ? String(data.h3) : '3';
+        this.h4 = data.h4 !== undefined ? String(data.h4) : '4';
+        this.i1 = data.i1 !== undefined ? data.i1 : '';
+        this.dnsIpv4 = data.dnsIpv4 || '1.1.1.1';
+        this.dnsIpv6 = data.dnsIpv6 || '2606:4700:4700::1111';
         this.externalInterface = data.externalInterface || '';
         this.ipv6ExternalInterface = data.ipv6ExternalInterface || undefined;
         this.postUp = data.postUp || '';

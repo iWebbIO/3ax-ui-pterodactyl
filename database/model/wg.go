@@ -23,8 +23,10 @@ type WgServer struct {
 	IPv6Pool    string `json:"ipv6Pool"`    // pool for clients, e.g. "2a01:xxx::/112"
 	IPv6Gateway string `json:"ipv6Gateway"` // upstream gateway for NDP
 
-	// DNS pushed to clients
-	DNS string `json:"dns" gorm:"default:'1.1.1.1,2606:4700:4700::1111'"`
+	// DNS pushed to clients, split by family. Composed into one DNS line in the
+	// client config; the IPv6 entry is used only when IPv6 is enabled.
+	DnsIpv4 string `json:"dnsIpv4" gorm:"default:'1.1.1.1'"`
+	DnsIpv6 string `json:"dnsIpv6" gorm:"default:'2606:4700:4700::1111'"`
 
 	// External interface for NAT (IPv4)
 	ExternalInterface string `json:"externalInterface" gorm:"default:''"`

@@ -23,19 +23,28 @@ type AwgServer struct {
 	IPv6Pool    string `json:"ipv6Pool"`    // pool for clients, e.g. "2a01:xxx::/112"
 	IPv6Gateway string `json:"ipv6Gateway"` // upstream gateway for NDP
 
-	// AmneziaWG obfuscation parameters
+	// AmneziaWG obfuscation parameters (1.x core set: Jc/Jmin/Jmax/S1/S2/H1-H4).
 	Jc   int `json:"jc" gorm:"default:4"`
 	Jmin int `json:"jmin" gorm:"default:50"`
 	Jmax int `json:"jmax" gorm:"default:1000"`
 	S1   int `json:"s1" gorm:"default:0"`
 	S2   int `json:"s2" gorm:"default:0"`
-	H1   int `json:"h1" gorm:"default:1"`
-	H2   int `json:"h2" gorm:"default:2"`
-	H3   int `json:"h3" gorm:"default:3"`
-	H4   int `json:"h4" gorm:"default:4"`
+	// AmneziaWG 2.0 additions. S3/S4 add padding to cookie/transport packets;
+	// I1 is a CPS signature packet sent before handshakes. H1-H4 are stored as
+	// strings so each holds either a single 1.x value ("1") or a 2.0 range
+	// ("100000-800000"). Empty S3/S4/I1 ⇒ the server stays on classic 1.x output.
+	S3 int    `json:"s3" gorm:"default:0"`
+	S4 int    `json:"s4" gorm:"default:0"`
+	H1 string `json:"h1" gorm:"default:'1'"`
+	H2 string `json:"h2" gorm:"default:'2'"`
+	H3 string `json:"h3" gorm:"default:'3'"`
+	H4 string `json:"h4" gorm:"default:'4'"`
+	I1 string `json:"i1" gorm:"default:''"`
 
-	// DNS pushed to clients
-	DNS string `json:"dns" gorm:"default:'1.1.1.1,2606:4700:4700::1111'"`
+	// DNS pushed to clients, split by family. Composed into one DNS line in the
+	// client config; the IPv6 entry is used only when IPv6 is enabled.
+	DnsIpv4 string `json:"dnsIpv4" gorm:"default:'1.1.1.1'"`
+	DnsIpv6 string `json:"dnsIpv6" gorm:"default:'2606:4700:4700::1111'"`
 
 	// External interface for NAT (IPv4)
 	ExternalInterface string `json:"externalInterface" gorm:"default:''"`

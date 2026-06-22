@@ -106,8 +106,17 @@ func GenerateClientConfig(server *model.WgServer, client *model.WgClient) string
 	}
 	b.WriteString(fmt.Sprintf("Address = %s\n", strings.Join(addresses, ", ")))
 
-	if server.DNS != "" {
-		b.WriteString(fmt.Sprintf("DNS = %s\n", server.DNS))
+	// Compose the client DNS line from the per-family fields; the IPv6 DNS is
+	// included only when IPv6 is enabled on the server.
+	var dnsParts []string
+	if server.DnsIpv4 != "" {
+		dnsParts = append(dnsParts, server.DnsIpv4)
+	}
+	if server.IPv6Enabled && server.DnsIpv6 != "" {
+		dnsParts = append(dnsParts, server.DnsIpv6)
+	}
+	if len(dnsParts) > 0 {
+		b.WriteString(fmt.Sprintf("DNS = %s\n", strings.Join(dnsParts, ", ")))
 	}
 
 	if server.MTU > 0 {

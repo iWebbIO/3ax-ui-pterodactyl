@@ -11,8 +11,10 @@ import (
 	"syscall"
 	_ "unsafe"
 
+	"github.com/coinman-dev/3ax-ui/v2/awg"
 	"github.com/coinman-dev/3ax-ui/v2/config"
 	"github.com/coinman-dev/3ax-ui/v2/database"
+	"github.com/coinman-dev/3ax-ui/v2/database/model"
 	"github.com/coinman-dev/3ax-ui/v2/logger"
 	"github.com/coinman-dev/3ax-ui/v2/sub"
 	"github.com/coinman-dev/3ax-ui/v2/util/crypto"
@@ -405,6 +407,32 @@ func migrateDb() {
 	fmt.Println("Migration done!")
 }
 
+// generateAwg2 fills the AmneziaWG server row with freshly generated 2.0
+// obfuscation parameters (DB only, no interface changes). Used by install.sh on
+// a FRESH install so new setups default to AmneziaWG 2.0; on update the caller
+// skips this so existing servers keep their params (admin opts in via the panel).
+func generateAwg2() {
+	if err := database.InitDB(config.GetDBPath()); err != nil {
+		log.Fatal(err)
+	}
+	db := database.GetDB()
+	var server model.AwgServer
+	if err := db.First(&server).Error; err != nil {
+		fmt.Println("No AmneziaWG server to configure:", err)
+		return
+	}
+	o := awg.GenerateObfuscation20("default")
+	server.Jc, server.Jmin, server.Jmax = o.Jc, o.Jmin, o.Jmax
+	server.S1, server.S2, server.S3, server.S4 = o.S1, o.S2, o.S3, o.S4
+	server.H1, server.H2, server.H3, server.H4 = o.H1, o.H2, o.H3, o.H4
+	server.I1 = o.I1
+	if err := db.Save(&server).Error; err != nil {
+		fmt.Println("Failed to save AmneziaWG 2.0 parameters:", err)
+		return
+	}
+	fmt.Println("AmneziaWG 2.0 obfuscation parameters generated.")
+}
+
 // main is the entry point of the 3AX-UI application.
 // It parses command-line arguments to run the web server, migrate database, or update settings.
 func main() {
@@ -478,6 +506,8 @@ func main() {
 		runWebServer()
 	case "migrate":
 		migrateDb()
+	case "awg-gen2":
+		generateAwg2()
 	case "setting":
 		err := settingCmd.Parse(os.Args[2:])
 		if err != nil {

@@ -2624,6 +2624,52 @@ func (t *Tgbot) sendClientQRLinks(chatId int64, email string) {
 	}
 }
 
+// SendAwgConfigsToClients sends every enabled AWG client that has a linked
+// Telegram chat (TgId) their current config as a .conf document plus a QR
+// image, with a short notice. Intended for use right after switching the AWG
+// server to 2.0: the client's old config no longer matches the server's
+// obfuscation, so this lets them re-import without contacting the admin.
+// Returns how many clients were notified.
+func (t *Tgbot) SendAwgConfigsToClients() (int, error) {
+	if !t.IsRunning() {
+		return 0, common.NewError("telegram bot is not running")
+	}
+	clients, err := t.awgService.GetClients()
+	if err != nil {
+		return 0, err
+	}
+	notice := t.I18nBot("tgbot.messages.awgConfigUpdated")
+	notified := 0
+	for _, c := range clients {
+		if c.TgId == 0 || !c.Enable {
+			continue
+		}
+		conf, err := t.awgService.GetClientConfig(c.Id)
+		if err != nil || conf == "" {
+			logger.Warning("AWG notify: config unavailable for", c.Email, err)
+			continue
+		}
+		filename := c.Email + ".conf"
+		if filename == ".conf" {
+			filename = "amneziawg.conf"
+		}
+		t.SendMsgToTgbot(c.TgId, notice)
+		doc := tu.Document(tu.ID(c.TgId), tu.FileFromBytes([]byte(conf), filename))
+		if _, err := bot.SendDocument(context.Background(), doc); err != nil {
+			logger.Warning("AWG notify: SendDocument failed for", c.Email, err)
+			continue
+		}
+		// Best-effort QR of the config for in-app scan import.
+		if png, qerr := qrcode.Encode(conf, qrcode.Medium, 320); qerr == nil {
+			qrDoc := tu.Document(tu.ID(c.TgId), tu.FileFromBytes(png, filename+".png"))
+			_, _ = bot.SendDocument(context.Background(), qrDoc)
+		}
+		notified++
+		time.Sleep(50 * time.Millisecond)
+	}
+	return notified, nil
+}
+
 // SendMsgToTgbotAdmins sends a message to all admin Telegram chats.
 func (t *Tgbot) SendMsgToTgbotAdmins(msg string, replyMarkup ...telego.ReplyMarkup) {
 	if len(replyMarkup) > 0 {

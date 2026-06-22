@@ -192,6 +192,10 @@ func InitDB(dbPath string) error {
 	// so they share the rich per-user infrastructure (traffic, expiry, quota) with VLESS.
 	migrateMixedHttpAccounts()
 
+	// Split the legacy combined AWG/WG `dns` column into dns_ipv4 / dns_ipv6 so
+	// an upgrade preserves the installed DNS instead of reverting to defaults.
+	migrateAwgWgDnsSplit()
+
 	isUsersEmpty, err := isTableEmpty("users")
 	if err != nil {
 		return err
@@ -211,6 +215,59 @@ func migrateAwgClientUUIDs() {
 		client.UUID = uuid.New().String()
 		db.Model(&client).Update("uuid", client.UUID)
 	}
+}
+
+// migrateAwgWgDnsSplit moves the legacy combined `dns` column of awg_servers /
+// wg_servers into the per-family dns_ipv4 / dns_ipv6 columns, so an upgrade
+// preserves the installed DNS instead of reverting to defaults. Idempotent: the
+// old `dns` value is cleared once split, so it runs only on the first start
+// after the upgrade (and is skipped on fresh installs where the column is gone).
+func migrateAwgWgDnsSplit() {
+	for _, table := range []string{"awg_servers", "wg_servers"} {
+		if !legacyDnsColumnExists(table) {
+			continue
+		}
+		type dnsRow struct {
+			Id  int
+			Dns string
+		}
+		var rows []dnsRow
+		db.Raw(fmt.Sprintf("SELECT id, dns FROM %s WHERE dns IS NOT NULL AND dns != ''", table)).Scan(&rows)
+		for _, r := range rows {
+			v4, v6 := splitDnsByFamily(r.Dns)
+			if err := db.Exec(
+				fmt.Sprintf("UPDATE %s SET dns_ipv4 = ?, dns_ipv6 = ?, dns = '' WHERE id = ?", table),
+				v4, v6, r.Id,
+			).Error; err != nil {
+				log.Printf("migrateAwgWgDnsSplit: update %s id=%d failed: %v", table, r.Id, err)
+			}
+		}
+	}
+}
+
+// legacyDnsColumnExists reports whether the table still has the old `dns` column.
+func legacyDnsColumnExists(table string) bool {
+	var n int64
+	db.Raw(fmt.Sprintf("SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name = 'dns'", table)).Scan(&n)
+	return n > 0
+}
+
+// splitDnsByFamily splits a comma-separated DNS list into IPv4 and IPv6 groups
+// (IPv6 entries are detected by the ':' character).
+func splitDnsByFamily(combined string) (ipv4, ipv6 string) {
+	var v4, v6 []string
+	for _, p := range strings.Split(combined, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if strings.Contains(p, ":") {
+			v6 = append(v6, p)
+		} else {
+			v4 = append(v4, p)
+		}
+	}
+	return strings.Join(v4, ","), strings.Join(v6, ",")
 }
 
 // migrateMixedHttpAccounts rewrites legacy mixed/http inbound settings:

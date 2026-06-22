@@ -13,7 +13,8 @@ class WgServer {
         this.ipv6Address = data.ipv6Address || '';
         this.ipv6Pool = data.ipv6Pool || '';
         this.ipv6Gateway = data.ipv6Gateway || '';
-        this.dns = data.dns || '1.1.1.1,2606:4700:4700::1111';
+        this.dnsIpv4 = data.dnsIpv4 || '1.1.1.1';
+        this.dnsIpv6 = data.dnsIpv6 || '2606:4700:4700::1111';
         this.externalInterface = data.externalInterface || '';
         this.ipv6ExternalInterface = data.ipv6ExternalInterface || undefined;
         this.postUp = data.postUp || '';

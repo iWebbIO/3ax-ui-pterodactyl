@@ -163,7 +163,8 @@ func (s *WgService) ResetToDefaults() (*model.WgServer, error) {
 	server.IPv4Pool = "10.77.77.0/24"
 	// Preserve: IPv6Enabled, IPv6Address, IPv6Pool, IPv6Gateway,
 	//           ExternalInterface, IPv6ExternalInterface, Endpoint
-	server.DNS = "1.1.1.1,2606:4700:4700::1111"
+	server.DnsIpv4 = "1.1.1.1"
+	server.DnsIpv6 = "2606:4700:4700::1111"
 	server.PostUp = ""
 	server.PostDown = ""
 	server.TrafficReset = "never"

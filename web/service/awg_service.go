@@ -70,6 +70,12 @@ func (s *AwgService) GetServer() (*model.AwgServer, error) {
 func (s *AwgService) SaveServer(server *model.AwgServer) error {
 	db := database.GetDB()
 
+	// Reject malformed obfuscation before persisting/applying so a bad manual
+	// entry can't tear the interface down on apply.
+	if err := awg.ValidateObfuscation(server); err != nil {
+		return err
+	}
+
 	if server.ListenPort <= 0 {
 		port, err := pickRandomTunnelListenPort(getExistingWgListenPort(db))
 		if err != nil {
@@ -82,12 +88,22 @@ func (s *AwgService) SaveServer(server *model.AwgServer) error {
 	// bring-down/up (syncconf does not re-execute PostUp/PostDown) and ask
 	// Xray to restart so it picks up the dokodemo-door inbound additions.
 	xrayDirty := false
+	obfDirty := false
 	var prev model.AwgServer
 	if err := db.First(&prev, server.Id).Error; err == nil {
 		if prev.RouteViaXray != server.RouteViaXray ||
 			prev.XrayInboundTag != server.XrayInboundTag ||
 			prev.XrayTproxyPort != server.XrayTproxyPort {
 			xrayDirty = true
+		}
+		// Obfuscation params are applied to the interface at creation time
+		// (awg-quick up → setconf); awg syncconf does not reliably re-apply
+		// them to a live interface, so any change needs a full bounce.
+		if prev.Jc != server.Jc || prev.Jmin != server.Jmin || prev.Jmax != server.Jmax ||
+			prev.S1 != server.S1 || prev.S2 != server.S2 || prev.S3 != server.S3 || prev.S4 != server.S4 ||
+			prev.H1 != server.H1 || prev.H2 != server.H2 || prev.H3 != server.H3 || prev.H4 != server.H4 ||
+			prev.I1 != server.I1 {
+			obfDirty = true
 		}
 	}
 
@@ -104,8 +120,10 @@ func (s *AwgService) SaveServer(server *model.AwgServer) error {
 	}
 
 	if server.Enable {
-		if xrayDirty && awg.IsInterfaceUp(server.InterfaceName) {
-			// Re-execute PostDown/PostUp by bouncing the interface.
+		if (xrayDirty || obfDirty) && awg.IsInterfaceUp(server.InterfaceName) {
+			// Re-execute PostDown/PostUp and re-apply interface-level params
+			// (including obfuscation) by bouncing the interface — syncconf
+			// alone does not re-apply them on a live interface.
 			if err := awg.InterfaceDown(server.InterfaceName); err != nil {
 				logger.Warning("AWG bounce: InterfaceDown failed:", err)
 			}
@@ -178,11 +196,15 @@ func (s *AwgService) ResetToDefaults() (*model.AwgServer, error) {
 	server.Jmax = 1000
 	server.S1 = 0
 	server.S2 = 0
-	server.H1 = 1
-	server.H2 = 2
-	server.H3 = 3
-	server.H4 = 4
-	server.DNS = "1.1.1.1,2606:4700:4700::1111"
+	server.S3 = 0
+	server.S4 = 0
+	server.H1 = "1"
+	server.H2 = "2"
+	server.H3 = "3"
+	server.H4 = "4"
+	server.I1 = ""
+	server.DnsIpv4 = "1.1.1.1"
+	server.DnsIpv6 = "2606:4700:4700::1111"
 	server.PostUp = ""
 	server.PostDown = ""
 	server.TrafficReset = "never"
@@ -203,6 +225,15 @@ func (s *AwgService) ResetToDefaults() (*model.AwgServer, error) {
 	}
 
 	return server, nil
+}
+
+// GenerateObfuscation returns a freshly generated AmneziaWG 2.0 obfuscation
+// parameter set for the given preset ("default" or "mobile") WITHOUT persisting
+// it. The UI fills the server form with these values; saving then applies them
+// (which regenerates client configs and re-applies the interface — existing
+// clients must re-import their config to keep working).
+func (s *AwgService) GenerateObfuscation(preset string) awg.Obfuscation20 {
+	return awg.GenerateObfuscation20(preset)
 }
 
 // ToggleServer enables or disables the AWG interface.

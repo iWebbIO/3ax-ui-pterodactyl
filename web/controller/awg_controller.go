@@ -12,6 +12,7 @@ import (
 
 type AwgController struct {
 	awgService service.AwgService
+	tgbot      service.Tgbot
 }
 
 func NewAwgController(g *gin.RouterGroup) *AwgController {
@@ -25,6 +26,8 @@ func (a *AwgController) initRouter(g *gin.RouterGroup) {
 	g.POST("/server", a.saveServer)
 	g.POST("/server/toggle", a.toggleServer)
 	g.POST("/server/reset", a.resetServer)
+	g.POST("/server/generate", a.generateObfuscation)
+	g.POST("/server/notify", a.notifyClients)
 	g.GET("/server/status", a.getServerStatus)
 	g.GET("/interfaces", a.getInterfaces)
 
@@ -85,6 +88,25 @@ func (a *AwgController) resetServer(c *gin.Context) {
 		return
 	}
 	jsonObj(c, server, nil)
+}
+
+// generateObfuscation returns a randomized AmneziaWG 2.0 parameter set for the
+// requested preset ("default" or "mobile"). It does not save anything — the UI
+// fills the form with the result and the admin saves to apply.
+func (a *AwgController) generateObfuscation(c *gin.Context) {
+	preset := c.Query("preset")
+	jsonObj(c, a.awgService.GenerateObfuscation(preset), nil)
+}
+
+// notifyClients sends every Telegram-linked AWG client their current config
+// via the bot — used after switching the server to 2.0 so clients can re-import.
+func (a *AwgController) notifyClients(c *gin.Context) {
+	count, err := a.tgbot.SendAwgConfigsToClients()
+	if err != nil {
+		jsonMsg(c, "notify AWG clients", err)
+		return
+	}
+	jsonObj(c, count, nil)
 }
 
 func (a *AwgController) getServerStatus(c *gin.Context) {

@@ -433,10 +433,9 @@
                     icon="download" @click="downloadAwgConfig()"></a-button>
                 </a-tooltip>
               </tr-info-title>
-              <div v-html="infoModal.awgConfig.replaceAll('\n','<br />')"
-                :style="{ borderRadius: '0.5rem', padding: '0.5rem', fontFamily: 'monospace', fontSize: '12px' }"
-                class="client-table-odd-row">
-              </div>
+              <div
+                :style="{ borderRadius: '0.5rem', padding: '0.5rem', fontFamily: 'monospace', fontSize: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }"
+                class="client-table-odd-row">[[ infoModal.awgConfig ]]</div>
             </tr-info-row>
           </template>
           <template v-if="dbInbound.isNativewg && infoModal.wgConfig">
@@ -453,10 +452,9 @@
                     icon="download" @click="downloadWgConfig()"></a-button>
                 </a-tooltip>
               </tr-info-title>
-              <div v-html="infoModal.wgConfig.replaceAll('\n','<br />')"
-                :style="{ borderRadius: '0.5rem', padding: '0.5rem', fontFamily: 'monospace', fontSize: '12px' }"
-                class="client-table-odd-row">
-              </div>
+              <div
+                :style="{ borderRadius: '0.5rem', padding: '0.5rem', fontFamily: 'monospace', fontSize: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }"
+                class="client-table-odd-row">[[ infoModal.wgConfig ]]</div>
             </tr-info-row>
           </template>
         </template>
