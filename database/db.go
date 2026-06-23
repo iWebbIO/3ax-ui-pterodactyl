@@ -181,6 +181,11 @@ func InitDB(dbPath string) error {
 		return err
 	}
 
+	// Add the AmneziaWG 2.0 / split-DNS columns ourselves BEFORE AutoMigrate to
+	// avoid a GORM SQLite "duplicate column name" failure when it adds columns
+	// while also rebuilding awg_servers for the H1-H4 int→string type change.
+	preMigrateAwgWgColumns()
+
 	if err := initModels(); err != nil {
 		return err
 	}
@@ -247,9 +252,46 @@ func migrateAwgWgDnsSplit() {
 
 // legacyDnsColumnExists reports whether the table still has the old `dns` column.
 func legacyDnsColumnExists(table string) bool {
+	return columnExists(table, "dns")
+}
+
+// tableExists reports whether a table exists in the database.
+func tableExists(table string) bool {
 	var n int64
-	db.Raw(fmt.Sprintf("SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name = 'dns'", table)).Scan(&n)
+	db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&n)
 	return n > 0
+}
+
+// columnExists reports whether the given table has the given column.
+func columnExists(table, col string) bool {
+	var n int64
+	db.Raw(fmt.Sprintf("SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name = ?", table), col).Scan(&n)
+	return n > 0
+}
+
+// preMigrateAwgWgColumns adds the AmneziaWG 2.0 / split-DNS columns to the
+// existing awg_servers / wg_servers tables BEFORE GORM AutoMigrate runs. Doing
+// the adds ourselves (idempotently) avoids a GORM SQLite quirk: adding columns
+// while it also rebuilds awg_servers for the H1-H4 int→string type change can
+// fail with "duplicate column name". No-op on fresh installs (the tables don't
+// exist yet — AutoMigrate then creates them with the full schema).
+func preMigrateAwgWgColumns() {
+	add := func(table, col, ddl string) {
+		if !tableExists(table) || columnExists(table, col) {
+			return
+		}
+		if err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, col, ddl)).Error; err != nil {
+			log.Printf("preMigrateAwgWgColumns: add %s.%s failed: %v", table, col, err)
+		}
+	}
+	for _, t := range []string{"awg_servers", "wg_servers"} {
+		add(t, "dns_ipv4", "text DEFAULT '1.1.1.1'")
+		add(t, "dns_ipv6", "text DEFAULT '2606:4700:4700::1111'")
+	}
+	// AmneziaWG-only obfuscation columns (native WireGuard has no obfuscation).
+	add("awg_servers", "s3", "integer DEFAULT 0")
+	add("awg_servers", "s4", "integer DEFAULT 0")
+	add("awg_servers", "i1", "text DEFAULT ''")
 }
 
 // splitDnsByFamily splits a comma-separated DNS list into IPv4 and IPv6 groups

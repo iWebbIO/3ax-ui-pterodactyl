@@ -843,13 +843,19 @@ config_after_update() {
         echo -e "${yellow}⚠ SSL Certificate: Enabled and configured${plain}"
     else
         echo -e "${green}SSL certificate is already configured${plain}"
-        # Show access URL with existing certificate
+        # Show access URL with existing certificate. IP certificates are stored
+        # in /root/cert/ip, so the directory name is the literal "ip" — show the
+        # real detected server IP instead of printing "https://ip:...".
         local cert_domain=$(basename "$(dirname "$existing_cert")")
+        local access_host="$cert_domain"
+        if [[ "$cert_domain" == "ip" ]]; then
+            access_host="${server_ip:-$cert_domain}"
+        fi
         echo ""
         echo -e "${green}═══════════════════════════════════════════${plain}"
         echo -e "${green}     Panel Access Information              ${plain}"
         echo -e "${green}═══════════════════════════════════════════${plain}"
-        echo -e "${green}Access URL: https://${cert_domain}:${existing_port}/${existing_webBasePath}${plain}"
+        echo -e "${green}Access URL: https://${access_host}:${existing_port}/${existing_webBasePath}${plain}"
         echo -e "${green}═══════════════════════════════════════════${plain}"
     fi
 }
