@@ -71,6 +71,10 @@ class DBInbound {
         return this.protocol === Protocols.NATIVEWG;
     }
 
+    get isMtproto() {
+        return this.protocol === Protocols.MTPROTO;
+    }
+
     get protocolDisplayName() {
         switch (this.protocol) {
             case Protocols.WIREGUARD:  return 'Wireguard (Xray NAT66)';

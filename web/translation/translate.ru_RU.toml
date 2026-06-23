@@ -362,6 +362,18 @@
 "monthly" = "Ежемесячно"
 "hourly" = "Ежечасно"
 
+[pages.inbounds.mtproto]
+"hint" = "MTProto — это прокси для Telegram, который запускает внешний процесс mtg (не Xray). Укажите публичный порт и домен прикрытия; секрет FakeTLS генерируется при сохранении и раздаётся одной ссылкой Telegram."
+"fakeTlsDomain" = "Домен FakeTLS"
+"secret" = "Секрет"
+"secretDesc" = "Секрет FakeTLS. Оставьте пустым для авто-генерации при сохранении или нажмите значок, чтобы сгенерировать сейчас."
+"secretPlaceholder" = "генерируется при сохранении"
+"shareLink" = "Ссылка прокси Telegram"
+"route" = "Маршрут через Xray"
+"routeDesc" = "Подключаться к Telegram через маршрутизатор ядра, а не напрямую. Используйте, когда Telegram заблокирован на этом сервере и нужно выходить через цепочку outbound."
+"outboundTag" = "Тег outbound"
+"outboundTagDesc" = "Тег outbound (или балансировщика) Xray, куда направить Telegram-трафик этого прокси — например, цепочка на сервер, где Telegram доступен. Пусто — outbound по умолчанию."
+
 [pages.inbounds.toasts]
 "obtain" = "Получить"
 "updateSuccess" = "Обновление прошло успешно"

@@ -362,6 +362,18 @@
 "monthly" = "Monthly"
 "hourly" = "Hourly"
 
+[pages.inbounds.mtproto]
+"hint" = "MTProto is a Telegram proxy run by an external mtg sidecar (not Xray). Pick a public port and a fronting domain; the FakeTLS secret is generated on save and shared with one Telegram link."
+"fakeTlsDomain" = "FakeTLS Domain"
+"secret" = "Secret"
+"secretDesc" = "FakeTLS secret. Leave empty to auto-generate on save, or click the icon to generate one now."
+"secretPlaceholder" = "auto-generated on save"
+"shareLink" = "Telegram Proxy Link"
+"route" = "Route through Xray"
+"routeDesc" = "Dial Telegram through the core's router instead of going out directly. Use this when Telegram is blocked on this server and you want to egress via an outbound chain."
+"outboundTag" = "Outbound tag"
+"outboundTagDesc" = "Tag of the Xray outbound (or balancer) to send this proxy's Telegram traffic to — e.g. a chain to a server where Telegram is reachable. Leave empty to use the default outbound."
+
 [pages.inbounds.toasts]
 "obtain" = "Obtain"
 "updateSuccess" = "The update was successful."

@@ -18,6 +18,7 @@ import (
 
 	"github.com/coinman-dev/3ax-ui/v2/config"
 	"github.com/coinman-dev/3ax-ui/v2/logger"
+	"github.com/coinman-dev/3ax-ui/v2/mtproto"
 	"github.com/coinman-dev/3ax-ui/v2/util/common"
 	"github.com/coinman-dev/3ax-ui/v2/web/controller"
 	"github.com/coinman-dev/3ax-ui/v2/web/job"
@@ -323,6 +324,8 @@ func (s *Server) startTask() {
 		s.cron.AddJob("@every 10s", job.NewAwgTrafficJob())
 		// WireGuard Native traffic stats every 10 seconds
 		s.cron.AddJob("@every 10s", job.NewWgTrafficJob())
+		// Reconcile mtproto (mtg) sidecars + scrape their traffic every 10 seconds
+		s.cron.AddJob("@every 10s", job.NewMtprotoJob())
 	}()
 
 	// check client ips from log file every 10 sec
@@ -485,6 +488,8 @@ func (s *Server) Start() (err error) {
 func (s *Server) Stop() error {
 	s.cancel()
 	s.xrayService.StopXray()
+	// Stop every mtg MTProto sidecar we launched (they run outside Xray).
+	mtproto.GetManager().StopAll()
 	if s.cron != nil {
 		s.cron.Stop()
 	}

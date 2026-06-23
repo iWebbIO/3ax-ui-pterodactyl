@@ -2813,7 +2813,7 @@
                             const inbound = dbInbound.toInbound();
                             if (inbound) {
                                 const clients = inbound.clients;
-                                if (clients.length > 0) {
+                                if (clients && clients.length > 0) {
                                     clients.forEach((client) => {
                                         if (
                                             client["subId"] ===

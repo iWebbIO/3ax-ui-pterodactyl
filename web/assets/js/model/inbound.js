@@ -11,6 +11,7 @@ const Protocols = {
     TUN: 'tun',
     AMNEZIAWG: 'amneziawg',
     NATIVEWG: 'nativewg',
+    MTPROTO: 'mtproto',
 };
 
 const SSMethods = {
@@ -2262,6 +2263,18 @@ class Inbound extends XrayCommonClass {
         }
     }
 
+    // MTProto proxies share a single FakeTLS secret across all users, so there
+    // is one Telegram share link per inbound (no per-client links). The secret
+    // is the hex value stored in settings; Telegram accepts it in t.me/proxy.
+    genMtprotoLink(address = '', port = this.port, remark = '') {
+        let addr = address;
+        if (ObjectUtil.isEmpty(addr)) {
+            addr = !ObjectUtil.isEmpty(this.listen) && this.listen !== "0.0.0.0" ? this.listen : location.hostname;
+        }
+        const secret = (this.settings && this.settings.secret) ? this.settings.secret : '';
+        return `https://t.me/proxy?server=${addr}&port=${port}&secret=${secret}`;
+    }
+
     genAllLinks(remark = '', remarkModel = '-ieo', client) {
         let result = [];
         let email = client ? client.email : '';
@@ -2307,6 +2320,9 @@ class Inbound extends XrayCommonClass {
             if (this.protocol == Protocols.SHADOWSOCKS && !this.isSSMultiUser) return this.genSSLink(addr, this.port, 'same', remark);
             if (this.protocol == Protocols.WIREGUARD) {
                 return this.genWireguardConfigs(remark, remarkModel);
+            }
+            if (this.protocol == Protocols.MTPROTO) {
+                return this.genMtprotoLink(addr, this.port, remark);
             }
             return '';
         }
@@ -2363,6 +2379,7 @@ Inbound.Settings = class extends XrayCommonClass {
             case Protocols.AMNEZIAWG: return new Inbound.AmneziawgSettings(protocol, [new Inbound.AmneziawgSettings.AwgPeer()]);
             case Protocols.NATIVEWG: return new Inbound.NativewgSettings(protocol, [new Inbound.NativewgSettings.WgPeer()]);
             case Protocols.HYSTERIA: return new Inbound.HysteriaSettings(protocol);
+            case Protocols.MTPROTO: return new Inbound.MtprotoSettings(protocol);
             default: return null;
         }
     }
@@ -2381,6 +2398,7 @@ Inbound.Settings = class extends XrayCommonClass {
             case Protocols.AMNEZIAWG: return Inbound.AmneziawgSettings.fromJson(json);
             case Protocols.NATIVEWG: return Inbound.NativewgSettings.fromJson(json);
             case Protocols.HYSTERIA: return Inbound.HysteriaSettings.fromJson(json);
+            case Protocols.MTPROTO: return Inbound.MtprotoSettings.fromJson(json);
             default: return null;
         }
     }
@@ -3562,6 +3580,65 @@ Inbound.NativewgSettings.WgPeer = class extends XrayCommonClass {
             _wgId: this._wgId,
             created_at: this.created_at,
             updated_at: this.updated_at,
+        };
+    }
+};
+
+// MTProto (FakeTLS) inbound — served by an external mtg sidecar, not Xray.
+// One proxy = one shared FakeTLS secret derived from the fronting domain;
+// there are no per-client users. The backend heals `secret` on save so it
+// always matches `fakeTlsDomain`.
+Inbound.MtprotoSettings = class extends Inbound.Settings {
+    constructor(
+        protocol,
+        secret = '',
+        fakeTlsDomain = 'www.cloudflare.com',
+        routeThroughXray = false,
+        outboundTag = '',
+    ) {
+        super(protocol);
+        this.secret = secret;
+        this.fakeTlsDomain = fakeTlsDomain;
+        // When enabled, mtg dials Telegram through a loopback SOCKS bridge the
+        // panel injects into Xray, routed to outboundTag — useful when Telegram
+        // is blocked on the panel host. routeXrayPort is backend-owned.
+        this.routeThroughXray = routeThroughXray;
+        this.outboundTag = outboundTag;
+    }
+
+    // Build the FakeTLS secret client-side so the operator can preview it
+    // before saving: "ee" + 16 random bytes (hex) + hex(fakeTlsDomain). The
+    // backend re-derives the same shape on save, so a value generated here
+    // survives unchanged as long as the domain is unchanged.
+    genSecret() {
+        const dom = (this.fakeTlsDomain || '').trim();
+        const buf = new Uint8Array(16);
+        (window.crypto || window.msCrypto).getRandomValues(buf);
+        let rand = '';
+        buf.forEach(b => rand += b.toString(16).padStart(2, '0'));
+        let domHex = '';
+        for (let i = 0; i < dom.length; i++) {
+            domHex += dom.charCodeAt(i).toString(16).padStart(2, '0');
+        }
+        this.secret = 'ee' + rand + domHex;
+    }
+
+    static fromJson(json = {}) {
+        return new Inbound.MtprotoSettings(
+            Protocols.MTPROTO,
+            json.secret,
+            json.fakeTlsDomain,
+            json.routeThroughXray,
+            json.outboundTag,
+        );
+    }
+
+    toJson() {
+        return {
+            secret: this.secret,
+            fakeTlsDomain: this.fakeTlsDomain,
+            routeThroughXray: this.routeThroughXray,
+            outboundTag: this.routeThroughXray ? (this.outboundTag || '') : '',
         };
     }
 };

@@ -13,6 +13,7 @@ import (
 	"github.com/coinman-dev/3ax-ui/v2/database"
 	"github.com/coinman-dev/3ax-ui/v2/database/model"
 	"github.com/coinman-dev/3ax-ui/v2/logger"
+	"github.com/coinman-dev/3ax-ui/v2/mtproto"
 	"github.com/coinman-dev/3ax-ui/v2/util/common"
 	"github.com/coinman-dev/3ax-ui/v2/xray"
 	"github.com/google/uuid"
@@ -231,6 +232,12 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 		return s.addNativeWgInbound(inbound)
 	}
 
+	// MTProto inbounds run as standalone mtg sidecars — save the DB record and
+	// let the reconcile job start mtg. They never enter the Xray config.
+	if inbound.Protocol == model.MTProto {
+		return s.addMtprotoInbound(inbound)
+	}
+
 	exist, err := s.checkPortExist(inbound.Listen, inbound.Port, 0)
 	if err != nil {
 		return inbound, false, err
@@ -411,6 +418,206 @@ func (s *InboundService) addAmneziawgInbound(inbound *model.Inbound) (*model.Inb
 	return inbound, false, nil
 }
 
+// mtprotoRoutesThroughXray reports whether an mtproto inbound is configured to
+// egress through the core's router (the loopback SOCKS bridge in xray.go).
+func mtprotoRoutesThroughXray(inbound *model.Inbound) bool {
+	if inbound == nil || inbound.Protocol != model.MTProto {
+		return false
+	}
+	var parsed struct {
+		RouteThroughXray bool `json:"routeThroughXray"`
+	}
+	if err := json.Unmarshal([]byte(inbound.Settings), &parsed); err != nil {
+		return false
+	}
+	return parsed.RouteThroughXray
+}
+
+func mtprotoSettingsXrayPort(parsed map[string]any) int {
+	switch v := parsed["routeXrayPort"].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return int(n)
+		}
+	}
+	return 0
+}
+
+func mtprotoParseXrayPort(settings string) int {
+	if settings == "" {
+		return 0
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(settings), &parsed); err != nil {
+		return 0
+	}
+	return mtprotoSettingsXrayPort(parsed)
+}
+
+// normalizeMtprotoXrayPort guarantees a routed mtproto inbound carries a stable
+// loopback egress port in its settings, so the generated Xray SOCKS bridge and
+// the mtg sidecar agree on where mtg dials out. The port is backend-owned: it is
+// allocated once when routing is first enabled and preserved across edits
+// (carried over from oldSettings, which wins over any value the client echoed
+// back). When routing is off it — together with the now-inert outbound selection
+// — is stripped so a disabled bridge leaves nothing stale behind.
+func (s *InboundService) normalizeMtprotoXrayPort(inbound *model.Inbound, oldSettings string) error {
+	if inbound.Protocol != model.MTProto {
+		return nil
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(inbound.Settings), &parsed); err != nil || parsed == nil {
+		return nil
+	}
+	routed, _ := parsed["routeThroughXray"].(bool)
+	if !routed {
+		_, hadPort := parsed["routeXrayPort"]
+		if !hadPort {
+			return nil
+		}
+		delete(parsed, "routeXrayPort")
+		if bs, err := json.MarshalIndent(parsed, "", "  "); err == nil {
+			inbound.Settings = string(bs)
+		} else {
+			logger.Warning("mtproto: failed to marshal settings after disabling routing:", err)
+		}
+		return nil
+	}
+
+	// Prefer the already-stored port (carried across edits), then any value the
+	// client sent, then allocate a fresh one.
+	port := mtprotoParseXrayPort(oldSettings)
+	if port <= 0 {
+		port = mtprotoSettingsXrayPort(parsed)
+	}
+	if port <= 0 {
+		allocated, err := mtproto.FreeLocalPort()
+		if err != nil {
+			return common.NewError("mtproto: could not allocate an Xray egress port:", err)
+		}
+		port = allocated
+	}
+	if mtprotoSettingsXrayPort(parsed) == port {
+		return nil
+	}
+	parsed["routeXrayPort"] = port
+	bs, err := json.MarshalIndent(parsed, "", "  ")
+	if err != nil {
+		return common.NewError("mtproto: could not persist the Xray egress port:", err)
+	}
+	inbound.Settings = string(bs)
+	return nil
+}
+
+// addMtprotoInbound creates an inbound record for an MTProto (mtg) proxy.
+// No xray config is generated for the proxy itself — mtg runs as a standalone
+// sidecar managed by the mtproto package + reconcile job. Unlike AWG/WG, MTProto
+// is multi-instance, so there is no single-inbound restriction; the public port
+// must be unique across all inbounds (the mtg process binds it directly). When
+// the inbound opts into routeThroughXray, a loopback SOCKS bridge is injected
+// into the Xray config (xray.go) — hence the needRestart return.
+func (s *InboundService) addMtprotoInbound(inbound *model.Inbound) (*model.Inbound, bool, error) {
+	exist, err := s.checkPortExist(inbound.Listen, inbound.Port, 0)
+	if err != nil {
+		return inbound, false, err
+	}
+	if exist {
+		return inbound, false, common.NewError("Port already exists:", inbound.Port)
+	}
+
+	if inbound.Tag == "" {
+		inbound.Tag = fmt.Sprintf("inbound-%v", inbound.Port)
+	}
+	// Normalise the FakeTLS secret so it always matches the configured domain
+	// before the value reaches mtg or a client share link.
+	if healed, ok := model.HealMtprotoSecret(inbound.Settings); ok {
+		inbound.Settings = healed
+	}
+	// Allocate the loopback egress port when routing through Xray is enabled.
+	if err := s.normalizeMtprotoXrayPort(inbound, ""); err != nil {
+		return inbound, false, err
+	}
+
+	db := database.GetDB()
+	tx := db.Begin()
+	defer func() {
+		if err == nil {
+			tx.Commit()
+		} else {
+			tx.Rollback()
+		}
+	}()
+
+	err = tx.Save(inbound).Error
+	if err != nil {
+		return inbound, false, err
+	}
+	// The reconcile job (every 10s) starts mtg for the new inbound. A restart is
+	// only needed when an egress SOCKS bridge must be added to the Xray config.
+	return inbound, mtprotoRoutesThroughXray(inbound), nil
+}
+
+// updateMtprotoInbound updates an existing MTProto inbound's DB record. The
+// reconcile job notices the changed fingerprint and restarts mtg accordingly;
+// nothing touches the Xray config.
+func (s *InboundService) updateMtprotoInbound(inbound *model.Inbound) (*model.Inbound, bool, error) {
+	exist, err := s.checkPortExist(inbound.Listen, inbound.Port, inbound.Id)
+	if err != nil {
+		return inbound, false, err
+	}
+	if exist {
+		return inbound, false, common.NewError("Port already exists:", inbound.Port)
+	}
+
+	oldInbound, err := s.GetInbound(inbound.Id)
+	if err != nil {
+		return inbound, false, err
+	}
+	wasRouted := mtprotoRoutesThroughXray(oldInbound)
+
+	if healed, ok := model.HealMtprotoSecret(inbound.Settings); ok {
+		inbound.Settings = healed
+	}
+	// Allocate/strip the loopback egress port to match the new routing state,
+	// carrying the existing port across edits.
+	if err := s.normalizeMtprotoXrayPort(inbound, oldInbound.Settings); err != nil {
+		return inbound, false, err
+	}
+
+	// Carry over editable fields; traffic counters are owned by the mtproto job.
+	oldInbound.Up = inbound.Up
+	oldInbound.Down = inbound.Down
+	oldInbound.Total = inbound.Total
+	oldInbound.Remark = inbound.Remark
+	oldInbound.Enable = inbound.Enable
+	oldInbound.ExpiryTime = inbound.ExpiryTime
+	oldInbound.TrafficReset = inbound.TrafficReset
+	oldInbound.Listen = inbound.Listen
+	oldInbound.Port = inbound.Port
+	oldInbound.Settings = inbound.Settings
+	// Regenerate the tag from listen/port like the generic update path does, so
+	// it tracks the (possibly changed) port and a stale tag can't later collide
+	// with a new inbound created on the old port (Tag is unique).
+	if inbound.Listen == "" || inbound.Listen == "0.0.0.0" || inbound.Listen == "::" || inbound.Listen == "::0" {
+		oldInbound.Tag = fmt.Sprintf("inbound-%v", inbound.Port)
+	} else {
+		oldInbound.Tag = fmt.Sprintf("inbound-%v:%v", inbound.Listen, inbound.Port)
+	}
+
+	db := database.GetDB()
+	if err := db.Save(oldInbound).Error; err != nil {
+		return inbound, false, err
+	}
+	// mtg itself is reconciled out-of-band. A restart is needed only when the
+	// egress SOCKS bridge must be added, moved, or dropped — i.e. the inbound is
+	// (or was) routed through Xray.
+	return inbound, mtprotoRoutesThroughXray(inbound) || wasRouted, nil
+}
+
 // DelInbound deletes an inbound configuration by ID.
 // It removes the inbound from the database and the running Xray instance if active.
 // Returns whether Xray needs restart and any error.
@@ -479,6 +686,17 @@ func (s *InboundService) DelInbound(id int) (bool, error) {
 		wgService := WgService{}
 		if err := wgService.DeleteAllClients(); err != nil {
 			logger.Warning("Failed to clean up WG data:", err)
+		}
+	}
+
+	// Stop the mtg sidecar immediately so the public port is freed at once
+	// (the reconcile job would otherwise take up to its interval to notice).
+	// A routed inbound also leaves an egress SOCKS bridge in the Xray config,
+	// so force a restart to drop it.
+	if inbound.Protocol == model.MTProto {
+		mtproto.GetManager().Remove(inbound.Id)
+		if mtprotoRoutesThroughXray(inbound) {
+			needRestart = true
 		}
 	}
 
@@ -559,6 +777,12 @@ func (s *InboundService) SetInboundEnable(id int, enable bool) (bool, error) {
 // It validates changes, updates the database, and syncs with the running Xray instance.
 // Returns the updated inbound, whether Xray needs restart, and any error.
 func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, bool, error) {
+	// MTProto inbounds run as standalone mtg sidecars — update the DB record and
+	// let the reconcile job restart mtg. They never enter the Xray config.
+	if inbound.Protocol == model.MTProto {
+		return s.updateMtprotoInbound(inbound)
+	}
+
 	exist, err := s.checkPortExist(inbound.Listen, inbound.Port, inbound.Id)
 	if err != nil {
 		return inbound, false, err
@@ -1873,13 +2097,13 @@ func (s *InboundService) disableInvalidClients(tx *gorm.DB) (bool, int64, error)
 func (s *InboundService) GetInboundTags() (string, error) {
 	db := database.GetDB()
 	var inboundTags []string
-	// Exclude AWG/NativeWG: their inbounds never enter the Xray config
+	// Exclude AWG/NativeWG/MTProto: their inbounds never enter the Xray config
 	// (xray.go skips them), so surfacing those tags in the routing rule
 	// dropdown invites broken rules. The TPROXY-mode tags below replace
 	// them as the real, working inbound identities for chained tunnels.
 	err := db.Model(model.Inbound{}).
 		Select("tag").
-		Where("protocol NOT IN ?", []string{string(model.AmneziaWG), string(model.NativeWG)}).
+		Where("protocol NOT IN ?", []string{string(model.AmneziaWG), string(model.NativeWG), string(model.MTProto)}).
 		Find(&inboundTags).Error
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return "", err

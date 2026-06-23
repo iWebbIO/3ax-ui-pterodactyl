@@ -117,8 +117,9 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		if !inbound.Enable {
 			continue
 		}
-		// Skip AmneziaWG and NativeWG — they are not Xray protocols
-		if inbound.Protocol == model.AmneziaWG || inbound.Protocol == model.NativeWG {
+		// Skip AmneziaWG, NativeWG and MTProto — they are not Xray protocols
+		// (MTProto runs as a standalone mtg sidecar; see the mtproto package).
+		if inbound.Protocol == model.AmneziaWG || inbound.Protocol == model.NativeWG || inbound.Protocol == model.MTProto {
 			continue
 		}
 		// get settings clients
@@ -243,7 +244,110 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 	// traffic into Xray we need a sink for the TPROXY-redirected packets.
 	xrayConfig.InboundConfigs = append(xrayConfig.InboundConfigs, tunnelTproxyInbounds()...)
 
+	// Route opted-in mtproto inbounds through Xray's router. Each one gets a
+	// loopback SOCKS bridge — tagged with the inbound's own tag — that its mtg
+	// sidecar dials Telegram through, plus an optional routing rule sending that
+	// tag to a selected outbound (e.g. a chain to a server where Telegram is
+	// reachable). mtproto inbounds are skipped from the main loop above (not Xray
+	// protocols), so this is the only place their egress bridge is built.
+	for _, inbound := range inbounds {
+		if inbound.Protocol == model.MTProto && inbound.Enable {
+			injectMtprotoEgress(xrayConfig, inbound)
+		}
+	}
+
 	return xrayConfig, nil
+}
+
+// mtprotoEgressSocksSettings is the loopback SOCKS server a routed mtproto
+// inbound exposes for its mtg sidecar to dial Telegram through. mtg makes plain
+// TCP connections, so UDP is left off.
+const mtprotoEgressSocksSettings = `{"auth":"noauth","udp":false}`
+
+// routingTagIsBalancer reports whether tag names a balancer in the parsed
+// routing section. A field rule targets a balancer via balancerTag and a
+// concrete outbound via outboundTag, so the caller picks the right key.
+func routingTagIsBalancer(routing map[string]any, tag string) bool {
+	if tag == "" {
+		return false
+	}
+	balancers, ok := routing["balancers"].([]any)
+	if !ok {
+		return false
+	}
+	for _, b := range balancers {
+		bm, ok := b.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, ok := bm["tag"].(string); ok && t == tag {
+			return true
+		}
+	}
+	return false
+}
+
+// injectMtprotoEgress wires one routed mtproto inbound into the generated
+// config: it appends a loopback SOCKS inbound (tagged with the inbound's own
+// tag, on the egress port persisted in settings) and, when an outbound is
+// selected, prepends a routing rule sending that tag to it. Both live only in
+// the generated config — the stored template is untouched.
+func injectMtprotoEgress(cfg *xray.Config, inbound *model.Inbound) {
+	var parsed struct {
+		RouteThroughXray bool   `json:"routeThroughXray"`
+		RouteXrayPort    int    `json:"routeXrayPort"`
+		OutboundTag      string `json:"outboundTag"`
+	}
+	if err := json.Unmarshal([]byte(inbound.Settings), &parsed); err != nil {
+		return
+	}
+	if !parsed.RouteThroughXray || parsed.RouteXrayPort <= 0 || inbound.Tag == "" {
+		return
+	}
+	tag := inbound.Tag
+	for i := range cfg.InboundConfigs {
+		if cfg.InboundConfigs[i].Tag == tag {
+			logger.Warning("mtproto egress: inbound tag [", tag, "] already present in generated config, skipping bridge")
+			return
+		}
+	}
+
+	if parsed.OutboundTag != "" {
+		routing := map[string]any{}
+		parseOK := true
+		if len(cfg.RouterConfig) > 0 {
+			if err := json.Unmarshal(cfg.RouterConfig, &routing); err != nil {
+				logger.Warning("mtproto egress: routing section is unparsable, skipping rule:", err)
+				parseOK = false
+			}
+		}
+		if parseOK {
+			rules, _ := routing["rules"].([]any)
+			rule := map[string]any{
+				"type":       "field",
+				"inboundTag": []any{tag},
+			}
+			if routingTagIsBalancer(routing, parsed.OutboundTag) {
+				rule["balancerTag"] = parsed.OutboundTag
+			} else {
+				rule["outboundTag"] = parsed.OutboundTag
+			}
+			routing["rules"] = append([]any{rule}, rules...)
+			if newRouting, err := json.Marshal(routing); err == nil {
+				cfg.RouterConfig = json_util.RawMessage(newRouting)
+			} else {
+				logger.Warning("mtproto egress: failed to rebuild routing section, skipping rule:", err)
+			}
+		}
+	}
+
+	cfg.InboundConfigs = append(cfg.InboundConfigs, xray.InboundConfig{
+		Listen:   json_util.RawMessage(`"127.0.0.1"`),
+		Port:     parsed.RouteXrayPort,
+		Protocol: "socks",
+		Settings: json_util.RawMessage(mtprotoEgressSocksSettings),
+		Tag:      tag,
+	})
 }
 
 // tunnelTproxyInbounds builds dokodemo-door inbounds for every enabled

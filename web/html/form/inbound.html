@@ -21,7 +21,8 @@
             <a-select-option v-for="p in Protocols" :key="p" :value="p"
                 >[[ p === 'wireguard' ? 'Wireguard (Xray NAT66)' : p ===
                 'amneziawg' ? 'AmneziaWG (Native IPv6)' : p === 'nativewg' ?
-                'Wireguard (Native IPv6)' : p ]]</a-select-option
+                'Wireguard (Native IPv6)' : p === 'mtproto' ? 'MTProto (Telegram)'
+                : p ]]</a-select-option
             >
         </a-select>
     </a-form-item>
@@ -217,6 +218,11 @@
     {{template "form/nativewg"}}
 </template>
 
+<!-- mtproto -->
+<template v-if="inbound.protocol === Protocols.MTPROTO">
+    {{template "form/mtproto"}}
+</template>
+
 <!-- stream settings -->
 <template v-if="inbound.canEnableStream()">
     {{template "form/streamSettings" .}} {{template "form/externalProxy" .}}
@@ -229,7 +235,7 @@
 
 <!-- sniffing -->
 <a-collapse
-    v-if="inbound.protocol !== Protocols.AMNEZIAWG && inbound.protocol !== Protocols.NATIVEWG"
+    v-if="inbound.protocol !== Protocols.AMNEZIAWG && inbound.protocol !== Protocols.NATIVEWG && inbound.protocol !== Protocols.MTPROTO"
 >
     <a-collapse-panel header="Sniffing">
         {{template "form/sniffing" .}}

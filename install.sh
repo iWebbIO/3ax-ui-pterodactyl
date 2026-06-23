@@ -1599,6 +1599,86 @@ xray_panel_arch() {
     esac
 }
 
+# Pinned mtg (MTProto FakeTLS sidecar, github.com/9seconds/mtg) version.
+MTG_VER="2.2.8"
+
+# Translates the panel's arch label to mtg's release-asset arch
+# (mtg-${MTG_VER}-linux-{ARCH}.tar.gz). Empty when 9seconds/mtg ships no
+# compatible binary for this arch (s390x has none; armv5 falls back to the
+# armv6 build, which true ARMv5 hardware may not run — that hardware is
+# effectively extinct, so this is a deliberate best-effort).
+mtg_release_arch() {
+    case "$(arch)" in
+        amd64) echo "amd64" ;;
+        386) echo "386" ;;
+        arm64) echo "arm64" ;;
+        armv7) echo "armv7" ;;
+        armv6|armv5) echo "armv6" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Translates the panel's arch label to the filename Go's mtproto package looks
+# up at runtime: bin/mtg-linux-{FNAME} where FNAME == runtime.GOARCH (so all
+# 32-bit arm variants collapse to "arm", matching xray_panel_arch).
+mtg_panel_arch() {
+    case "$(arch)" in
+        amd64) echo "amd64" ;;
+        386) echo "386" ;;
+        arm64) echo "arm64" ;;
+        armv7|armv6|armv5) echo "arm" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Downloads the mtg sidecar binary into the given bin dir as mtg-linux-{FNAME}.
+# MTProto inbounds run one mtg process each; the panel itself runs fine without
+# it (those inbounds simply won't start). Therefore this is fully non-fatal:
+# any failure prints a notice and returns 0 so the install proceeds.
+install_mtg() {
+    local target_bin_dir="$1"
+    local mtg_arch mtg_fname mtg_url tmp_tgz tmp_dir extracted
+    mtg_arch=$(mtg_release_arch)
+    mtg_fname=$(mtg_panel_arch)
+    if [[ -z "$mtg_arch" || -z "$mtg_fname" ]]; then
+        echo -e "${yellow}No prebuilt mtg (MTProto) binary for arch $(arch) — MTProto proxies will be unavailable.${plain}"
+        return 0
+    fi
+    # Already present (e.g. shipped in the release tarball) — just ensure +x.
+    if [[ -f "$target_bin_dir/mtg-linux-${mtg_fname}" ]]; then
+        chmod +x "$target_bin_dir/mtg-linux-${mtg_fname}"
+        return 0
+    fi
+    mtg_url="https://github.com/9seconds/mtg/releases/download/v${MTG_VER}/mtg-${MTG_VER}-linux-${mtg_arch}.tar.gz"
+    if ! check_url_or_skip "$mtg_url" "mtg (MTProto sidecar)"; then
+        echo -e "${yellow}Skipping mtg — MTProto proxies will be unavailable.${plain}"
+        return 0
+    fi
+    echo -e "${green}Downloading mtg (MTProto sidecar) ${mtg_url}...${plain}"
+    tmp_tgz="/tmp/mtg.$$.tar.gz"
+    tmp_dir="/tmp/mtg.$$.d"
+    if ! curl -4fLRo "$tmp_tgz" "$mtg_url"; then
+        rm -f "$tmp_tgz"
+        echo -e "${yellow}Failed to download mtg — MTProto proxies will be unavailable.${plain}"
+        return 0
+    fi
+    mkdir -p "$tmp_dir" "$target_bin_dir"
+    if tar -xzf "$tmp_tgz" -C "$tmp_dir" 2>/dev/null; then
+        extracted=$(find "$tmp_dir" -type f -name mtg 2>/dev/null | head -n1)
+        if [[ -n "$extracted" ]]; then
+            mv -f "$extracted" "$target_bin_dir/mtg-linux-${mtg_fname}"
+            chmod +x "$target_bin_dir/mtg-linux-${mtg_fname}"
+            echo -e "${green}  mtg installed as bin/mtg-linux-${mtg_fname}.${plain}"
+        else
+            echo -e "${yellow}mtg archive had no mtg binary — MTProto proxies will be unavailable.${plain}"
+        fi
+    else
+        echo -e "${yellow}Failed to extract mtg — MTProto proxies will be unavailable.${plain}"
+    fi
+    rm -rf "$tmp_tgz" "$tmp_dir"
+    return 0
+}
+
 # Downloads xray binary + geo data files into the given target directory.
 # Mirrors the logic in DockerInit.sh — same xray version (v26.3.27), same
 # geo-data sources. Always called fresh; we deliberately never reuse a
@@ -1839,14 +1919,21 @@ install_x-ui_finalize() {
     chmod +x x-ui
     [ -f x-ui.sh ] && chmod +x x-ui.sh
 
-    # Rename the bundled xray binary for arm variants — the panel always loads
-    # bin/xray-linux-arm regardless of the specific arm version.
+    # Rename the bundled xray/mtg binaries for arm variants — the panel always
+    # loads bin/{xray,mtg}-linux-arm regardless of the specific arm version.
     if [[ $(arch) == "armv5" || $(arch) == "armv6" || $(arch) == "armv7" ]]; then
         [ -f bin/xray-linux-$(arch) ] && mv bin/xray-linux-$(arch) bin/xray-linux-arm
         [ -f bin/xray-linux-arm ] && chmod +x bin/xray-linux-arm
+        [ -f bin/mtg-linux-$(arch) ] && mv bin/mtg-linux-$(arch) bin/mtg-linux-arm
+        [ -f bin/mtg-linux-arm ] && chmod +x bin/mtg-linux-arm
     fi
     chmod +x x-ui
     [ -f bin/xray-linux-$(arch) ] && chmod +x bin/xray-linux-$(arch)
+
+    # Ensure the mtg MTProto sidecar is present. No-op when already shipped in
+    # the release tarball; downloads it otherwise (e.g. older tarball, or the
+    # local-source build path which only fetches xray). Never fatal.
+    install_mtg "bin"
 
     mv -f /usr/bin/x-ui-temp /usr/bin/x-ui
     chmod +x /usr/bin/x-ui

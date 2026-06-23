@@ -2892,6 +2892,10 @@ func (t *Tgbot) getInbounds() (*telego.InlineKeyboardMarkup, error) {
 
 	var buttons []telego.InlineKeyboardButton
 	for _, inbound := range inbounds {
+		// MTProto inbounds have no clients to list.
+		if inbound.Protocol == model.MTProto {
+			continue
+		}
 		status := "❌"
 		if inbound.Enable {
 			status = "✅"
@@ -2924,6 +2928,10 @@ func (t *Tgbot) getInboundsFor(nextAction string) (*telego.InlineKeyboardMarkup,
 
 	var buttons []telego.InlineKeyboardButton
 	for _, inbound := range inbounds {
+		// MTProto inbounds have no clients to list.
+		if inbound.Protocol == model.MTProto {
+			continue
+		}
 		status := "❌"
 		if inbound.Enable {
 			status = "✅"
@@ -2994,6 +3002,9 @@ func (t *Tgbot) getInboundsAddClient() (*telego.InlineKeyboardMarkup, error) {
 		model.Mixed:     true,
 		model.WireGuard: true,
 		model.HTTP:      true,
+		// MTProto proxies share one secret and have no per-client users,
+		// so there is nothing to "add a client" to.
+		model.MTProto: true,
 	}
 
 	var buttons []telego.InlineKeyboardButton
