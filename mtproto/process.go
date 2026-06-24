@@ -20,18 +20,45 @@ import (
 	"github.com/coinman-dev/3ax-ui/v2/logger"
 )
 
-// GetBinaryName returns the mtg binary filename for the current OS and arch,
-// matching the naming scheme used for the Xray binary. On Windows the ".exe"
-// extension is appended so a natural "mtg-windows-amd64.exe" is found.
-func GetBinaryName() string {
-	name := fmt.Sprintf("mtg-%s-%s", runtime.GOOS, runtime.GOARCH)
+func archBinaryName(prefix string) string {
+	name := fmt.Sprintf("%s-%s-%s", prefix, runtime.GOOS, runtime.GOARCH)
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
 	return name
 }
 
-// GetBinaryPath returns the full path to the mtg binary, alongside the Xray binary.
+// multiUserBinaryName is the mtg-multi (dolonet/mtg-multi) fork binary, which
+// serves many users/secrets on one port. singleBinaryName is upstream mtg,
+// single-secret. install.sh picks one per arch (mtg-multi ships prebuilt only
+// for amd64/arm64), and the panel detects which is installed.
+func multiUserBinaryName() string { return archBinaryName("mtg-multi") }
+func singleBinaryName() string    { return archBinaryName("mtg") }
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+// MultiUserSupported reports whether the multi-user backend (mtg-multi) is
+// installed for this arch. When false only single-secret mtg is available (or
+// nothing), so an mtproto inbound is limited to one client.
+func MultiUserSupported() bool {
+	return fileExists(config.GetBinFolderPath() + "/" + multiUserBinaryName())
+}
+
+// GetBinaryName returns the filename of the MTProto backend that is actually
+// installed: mtg-multi if present in the bin folder, otherwise single-secret
+// mtg. Matches the naming scheme used for the Xray binary.
+func GetBinaryName() string {
+	if MultiUserSupported() {
+		return multiUserBinaryName()
+	}
+	return singleBinaryName()
+}
+
+// GetBinaryPath returns the full path to the active MTProto backend binary,
+// alongside the Xray binary.
 func GetBinaryPath() string {
 	return config.GetBinFolderPath() + "/" + GetBinaryName()
 }

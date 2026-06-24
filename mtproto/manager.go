@@ -12,9 +12,19 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coinman-dev/3ax-ui/v2/config"
 	"github.com/coinman-dev/3ax-ui/v2/database/model"
 	"github.com/coinman-dev/3ax-ui/v2/logger"
 )
+
+// ClientSecret is one active user of an mtproto proxy. Id is the mtg-multi
+// [secrets] entry name and the key under which mtg-multi's /stats reports the
+// user's traffic; Email is the panel ClientStats key.
+type ClientSecret struct {
+	Id     string
+	Secret string
+	Email  string
+}
 
 // Instance is the desired runtime configuration of one mtproto inbound.
 type Instance struct {
@@ -22,7 +32,12 @@ type Instance struct {
 	Tag    string
 	Listen string
 	Port   int
-	Secret string
+
+	// MultiUser selects the backend: true → mtg-multi (a [secrets] table, all
+	// Clients served on one port); false → single-secret mtg (only Clients[0]).
+	MultiUser bool
+	// Clients is the active (enabled, non-expired) client set, in stable order.
+	Clients []ClientSecret
 
 	// Optional mtg tuning; each is omitted from the generated TOML when
 	// zero-valued so mtg falls back to its own defaults.
@@ -49,11 +64,12 @@ func (inst Instance) bindTo() string {
 }
 
 // fingerprint changes whenever any value that ends up in the generated TOML
-// changes, so ensureLocked restarts mtg when the operator edits a setting.
+// changes, so ensureLocked restarts the proxy when the operator edits a setting
+// or adds/removes/enables/disables a client.
 func (inst Instance) fingerprint() string {
-	return strings.Join([]string{
+	parts := []string{
 		inst.bindTo(),
-		inst.Secret,
+		strconv.FormatBool(inst.MultiUser),
 		strconv.FormatBool(inst.Debug),
 		strconv.FormatBool(inst.ProxyProtocolListener),
 		inst.PreferIP,
@@ -62,24 +78,53 @@ func (inst Instance) fingerprint() string {
 		strconv.FormatBool(inst.FrontingProxyProtocol),
 		strconv.FormatBool(inst.RouteThroughXray),
 		strconv.Itoa(inst.XrayRoutePort),
-	}, "|")
+	}
+	for _, c := range inst.activeClients() {
+		// Email is part of the fingerprint so a per-client email rename restarts
+		// the sidecar and refreshes the cached id→email map used for traffic
+		// attribution (otherwise that client's traffic is dropped until a restart).
+		parts = append(parts, c.Id+"="+c.Secret+"="+c.Email)
+	}
+	return strings.Join(parts, "|")
 }
 
-// Traffic is a per-inbound traffic delta scraped from an mtg metrics endpoint.
+// activeClients returns the clients the backend will actually serve: all of them
+// for mtg-multi, only the first for single-secret mtg.
+func (inst Instance) activeClients() []ClientSecret {
+	if inst.MultiUser || len(inst.Clients) <= 1 {
+		return inst.Clients
+	}
+	return inst.Clients[:1]
+}
+
+// Traffic is a traffic delta since the previous scrape. For a multi-user proxy
+// it is per-client (Email set to the client's); for a single-secret proxy it is
+// the per-inbound delta attributed to the sole client's Email.
 type Traffic struct {
-	Tag  string
-	Up   int64
-	Down int64
+	Tag   string
+	Email string
+	Up    int64
+	Down  int64
 }
 
 type managed struct {
 	proc        *Process
 	tag         string
 	fingerprint string
-	metricsPort int
-	lastUp      int64
-	lastDown    int64
-	haveLast    bool
+	statsPort   int
+	multiUser   bool
+	clients     []ClientSecret
+	// Single-secret mode: per-process cumulative counters.
+	lastUp   int64
+	lastDown int64
+	haveLast bool
+	// Multi-user mode: per-client cumulative counters, keyed by client Id.
+	lastByClient map[string]clientCounter
+}
+
+type clientCounter struct {
+	up   int64
+	down int64
 }
 
 // Manager owns the set of running mtg processes keyed by inbound id.
@@ -104,19 +149,19 @@ func GetManager() *Manager {
 	return manager
 }
 
-// InstanceFromInbound derives a desired Instance from an mtproto inbound,
-// healing the FakeTLS secret so it always matches the configured domain.
-// Returns false when the inbound is not a usable mtproto inbound.
+// InstanceFromInbound derives a desired Instance from an mtproto inbound: it
+// heals each client's FakeTLS secret, then keeps only the clients the backend
+// should currently serve (enabled and not past their expiry). Returns false when
+// the inbound is not a usable mtproto inbound or has no active clients.
 func InstanceFromInbound(ib *model.Inbound) (Instance, bool) {
 	if ib == nil || ib.Protocol != model.MTProto {
 		return Instance{}, false
 	}
 	settings := ib.Settings
-	if healed, ok := model.HealMtprotoSecret(settings); ok {
+	if healed, ok := model.HealMtprotoClients(settings); ok {
 		settings = healed
 	}
 	var parsed struct {
-		Secret                string `json:"secret"`
 		Debug                 bool   `json:"debug"`
 		ProxyProtocolListener bool   `json:"proxyProtocolListener"`
 		PreferIP              string `json:"preferIp"`
@@ -131,7 +176,23 @@ func InstanceFromInbound(ib *model.Inbound) (Instance, bool) {
 	if err := json.Unmarshal([]byte(settings), &parsed); err != nil {
 		return Instance{}, false
 	}
-	if parsed.Secret == "" {
+
+	_, clients := model.ParseMtprotoClients(settings)
+	nowMs := time.Now().UnixMilli()
+	active := make([]ClientSecret, 0, len(clients))
+	for _, c := range clients {
+		if !c.Enable {
+			continue
+		}
+		if c.ExpiryTime > 0 && c.ExpiryTime <= nowMs {
+			continue
+		}
+		if strings.TrimSpace(c.Id) == "" || strings.TrimSpace(c.Secret) == "" {
+			continue
+		}
+		active = append(active, ClientSecret{Id: c.Id, Secret: c.Secret, Email: c.Email})
+	}
+	if len(active) == 0 {
 		return Instance{}, false
 	}
 	return Instance{
@@ -139,7 +200,8 @@ func InstanceFromInbound(ib *model.Inbound) (Instance, bool) {
 		Tag:                   ib.Tag,
 		Listen:                ib.Listen,
 		Port:                  ib.Port,
-		Secret:                parsed.Secret,
+		MultiUser:             MultiUserSupported(),
+		Clients:               active,
 		Debug:                 parsed.Debug,
 		ProxyProtocolListener: parsed.ProxyProtocolListener,
 		PreferIP:              parsed.PreferIP,
@@ -169,8 +231,15 @@ func (m *Manager) sweepOrphansLocked() {
 		return
 	}
 	m.swept = true
-	if n := killStrayMtgProcesses(GetBinaryPath()); n > 0 {
-		logger.Warningf("mtproto: terminated %d orphaned mtg process(es) from a previous run", n)
+	// Sweep both backend binaries: a panel may have switched between mtg and
+	// mtg-multi across updates, leaving an orphan of the other kind.
+	bin := config.GetBinFolderPath()
+	total := 0
+	for _, name := range []string{multiUserBinaryName(), singleBinaryName()} {
+		total += killStrayMtgProcesses(bin + "/" + name)
+	}
+	if total > 0 {
+		logger.Warningf("mtproto: terminated %d orphaned mtg process(es) from a previous run", total)
 	}
 }
 
@@ -184,12 +253,12 @@ func (m *Manager) ensureLocked(inst Instance) error {
 		cur.proc.Stop()
 		delete(m.procs, inst.Id)
 	}
-	metricsPort, err := FreeLocalPort()
+	statsPort, err := FreeLocalPort()
 	if err != nil {
 		return err
 	}
 	cfgPath := configPathForID(inst.Id)
-	if err := writeConfig(cfgPath, inst, metricsPort); err != nil {
+	if err := writeConfig(cfgPath, inst, statsPort); err != nil {
 		return err
 	}
 	proc := newProcess(cfgPath, fmt.Sprintf("inbound %d", inst.Id))
@@ -197,12 +266,15 @@ func (m *Manager) ensureLocked(inst Instance) error {
 		return err
 	}
 	m.procs[inst.Id] = &managed{
-		proc:        proc,
-		tag:         inst.Tag,
-		fingerprint: fp,
-		metricsPort: metricsPort,
+		proc:         proc,
+		tag:          inst.Tag,
+		fingerprint:  fp,
+		statsPort:    statsPort,
+		multiUser:    inst.MultiUser,
+		clients:      inst.activeClients(),
+		lastByClient: map[string]clientCounter{},
 	}
-	logger.Infof("mtproto: started mtg for inbound %d on %s", inst.Id, inst.bindTo())
+	logger.Infof("mtproto: started %s for inbound %d on %s (%d client(s))", GetBinaryName(), inst.Id, inst.bindTo(), len(inst.activeClients()))
 	return nil
 }
 
@@ -254,18 +326,23 @@ func (m *Manager) StopAll() {
 	}
 }
 
-// CollectTraffic scrapes each running mtg metrics endpoint and returns the
-// per-inbound byte deltas since the previous scrape.
+// CollectTraffic scrapes each running proxy's stats endpoint and returns the
+// byte deltas since the previous scrape — per-client for multi-user (mtg-multi
+// /stats), per-inbound for single-secret (mtg /metrics, attributed to the sole
+// client).
 func (m *Manager) CollectTraffic() []Traffic {
 	// Snapshot the state we need under the lock, then release before doing
 	// network I/O so that Ensure/Reconcile/Remove are not blocked.
 	type snap struct {
-		id          int
-		metricsPort int
-		tag         string
-		haveLast    bool
-		lastUp      int64
-		lastDown    int64
+		id           int
+		statsPort    int
+		tag          string
+		multiUser    bool
+		clients      []ClientSecret
+		haveLast     bool
+		lastUp       int64
+		lastDown     int64
+		lastByClient map[string]clientCounter
 	}
 	m.mu.Lock()
 	snaps := make([]snap, 0, len(m.procs))
@@ -273,20 +350,63 @@ func (m *Manager) CollectTraffic() []Traffic {
 		if cur.proc == nil || !cur.proc.IsRunning() {
 			continue
 		}
+		lbc := make(map[string]clientCounter, len(cur.lastByClient))
+		for k, v := range cur.lastByClient {
+			lbc[k] = v
+		}
 		snaps = append(snaps, snap{
-			id:          id,
-			metricsPort: cur.metricsPort,
-			tag:         cur.tag,
-			haveLast:    cur.haveLast,
-			lastUp:      cur.lastUp,
-			lastDown:    cur.lastDown,
+			id:           id,
+			statsPort:    cur.statsPort,
+			tag:          cur.tag,
+			multiUser:    cur.multiUser,
+			clients:      cur.clients,
+			haveLast:     cur.haveLast,
+			lastUp:       cur.lastUp,
+			lastDown:     cur.lastDown,
+			lastByClient: lbc,
 		})
 	}
 	m.mu.Unlock()
 
 	out := make([]Traffic, 0, len(snaps))
 	for _, s := range snaps {
-		up, down, ok := scrapeTraffic(s.metricsPort)
+		if s.multiUser {
+			users, ok := scrapeStats(s.statsPort)
+			if !ok {
+				continue
+			}
+			newByClient := make(map[string]clientCounter, len(s.clients))
+			for _, c := range s.clients {
+				u, exists := users[c.Id]
+				if !exists {
+					continue
+				}
+				newByClient[c.Id] = u
+				prev, had := s.lastByClient[c.Id]
+				if had && c.Email != "" {
+					du := u.up - prev.up
+					dd := u.down - prev.down
+					if du < 0 {
+						du = 0
+					}
+					if dd < 0 {
+						dd = 0
+					}
+					if du > 0 || dd > 0 {
+						out = append(out, Traffic{Tag: s.tag, Email: c.Email, Up: du, Down: dd})
+					}
+				}
+			}
+			m.mu.Lock()
+			if cur, ok := m.procs[s.id]; ok {
+				cur.lastByClient = newByClient
+			}
+			m.mu.Unlock()
+			continue
+		}
+
+		// Single-secret mode: /metrics is per-inbound; attribute to clients[0].
+		up, down, ok := scrapeTraffic(s.statsPort)
 		if !ok {
 			continue
 		}
@@ -301,9 +421,6 @@ func (m *Manager) CollectTraffic() []Traffic {
 				dd = 0
 			}
 		}
-
-		// Re-acquire lock to persist the new baseline, but only if the entry
-		// still exists (it may have been removed during the scrape).
 		m.mu.Lock()
 		if cur, ok := m.procs[s.id]; ok {
 			cur.lastUp = up
@@ -312,11 +429,37 @@ func (m *Manager) CollectTraffic() []Traffic {
 		}
 		m.mu.Unlock()
 
-		if s.haveLast && (du > 0 || dd > 0) {
-			out = append(out, Traffic{Tag: s.tag, Up: du, Down: dd})
+		if s.haveLast && (du > 0 || dd > 0) && len(s.clients) > 0 {
+			out = append(out, Traffic{Tag: s.tag, Email: s.clients[0].Email, Up: du, Down: dd})
 		}
 	}
 	return out
+}
+
+// scrapeStats reads mtg-multi's /stats JSON and returns each user's cumulative
+// byte counters keyed by the [secrets] entry name (= client Id). bytes_in is the
+// client's upload (toward Telegram), bytes_out its download.
+func scrapeStats(port int) (map[string]clientCounter, bool) {
+	client := http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/stats", port))
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	var parsed struct {
+		Users map[string]struct {
+			BytesIn  int64 `json:"bytes_in"`
+			BytesOut int64 `json:"bytes_out"`
+		} `json:"users"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, false
+	}
+	out := make(map[string]clientCounter, len(parsed.Users))
+	for name, u := range parsed.Users {
+		out[name] = clientCounter{up: u.BytesIn, down: u.BytesOut}
+	}
+	return out, true
 }
 
 // FreeLocalPort asks the OS for an unused loopback TCP port. It is used both
@@ -335,9 +478,20 @@ func FreeLocalPort() (int, error) {
 // any [section] header in TOML, so the layout is: required keys, then the
 // optional scalar tuning, then [domain-fronting], and finally [stats.prometheus]
 // — which x-ui always emits and scrapes for traffic (see scrapeTraffic).
-func renderConfig(inst Instance, metricsPort int) string {
+// renderConfig builds the proxy TOML. TOML top-level keys must precede any
+// [section] header, so the layout is: top-level keys (secret/bind-to/api-bind-to
+// + tuning), then [secrets] (multi-user), [domain-fronting], [network], and
+// finally [stats.prometheus] (single-user). statsPort hosts mtg-multi's /stats
+// (multi-user) or mtg's /metrics (single-user) — the panel scrapes whichever.
+func renderConfig(inst Instance, statsPort int) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "secret = %q\n", inst.Secret)
+	clients := inst.activeClients()
+	if inst.MultiUser {
+		// mtg-multi reads per-user traffic from /stats on api-bind-to.
+		fmt.Fprintf(&b, "api-bind-to = \"127.0.0.1:%d\"\n", statsPort)
+	} else if len(clients) > 0 {
+		fmt.Fprintf(&b, "secret = %q\n", clients[0].Secret)
+	}
 	fmt.Fprintf(&b, "bind-to = %q\n", inst.bindTo())
 	if inst.Debug {
 		b.WriteString("debug = true\n")
@@ -347,6 +501,12 @@ func renderConfig(inst Instance, metricsPort int) string {
 	}
 	if inst.PreferIP != "" {
 		fmt.Fprintf(&b, "prefer-ip = %q\n", inst.PreferIP)
+	}
+	if inst.MultiUser {
+		b.WriteString("\n[secrets]\n")
+		for _, c := range clients {
+			fmt.Fprintf(&b, "%s = %q\n", c.Id, c.Secret)
+		}
 	}
 	if inst.FrontingIP != "" || inst.FrontingPort > 0 || inst.FrontingProxyProtocol {
 		b.WriteString("\n[domain-fronting]\n")
@@ -360,21 +520,22 @@ func renderConfig(inst Instance, metricsPort int) string {
 			b.WriteString("proxy-protocol = true\n")
 		}
 	}
-	// When the inbound opts into Xray routing, mtg reaches Telegram through the
-	// loopback SOCKS bridge the panel injects into the running Xray config. mtg
-	// only supports SOCKS5 upstreams, which is exactly what the bridge exposes.
+	// When the inbound opts into Xray routing, the proxy reaches Telegram through
+	// the loopback SOCKS bridge the panel injects into the running Xray config.
 	if inst.RouteThroughXray && inst.XrayRoutePort > 0 {
 		fmt.Fprintf(&b, "\n[network]\nproxies = [\"socks5://127.0.0.1:%d\"]\n", inst.XrayRoutePort)
 	}
-	fmt.Fprintf(&b, "\n[stats.prometheus]\nenabled = true\nbind-to = \"127.0.0.1:%d\"\nhttp-path = \"/metrics\"\nmetric-prefix = \"mtg\"\n", metricsPort)
+	if !inst.MultiUser {
+		fmt.Fprintf(&b, "\n[stats.prometheus]\nenabled = true\nbind-to = \"127.0.0.1:%d\"\nhttp-path = \"/metrics\"\nmetric-prefix = \"mtg\"\n", statsPort)
+	}
 	return b.String()
 }
 
-func writeConfig(path string, inst Instance, metricsPort int) error {
+func writeConfig(path string, inst Instance, statsPort int) error {
 	if err := os.MkdirAll(configDir(), 0o750); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(renderConfig(inst, metricsPort)), 0o640)
+	return os.WriteFile(path, []byte(renderConfig(inst, statsPort)), 0o640)
 }
 
 // scrapeTraffic reads the mtg Prometheus metrics endpoint and sums byte

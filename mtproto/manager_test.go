@@ -7,6 +7,10 @@ import (
 	"github.com/coinman-dev/3ax-ui/v2/database/model"
 )
 
+func oneClient(secret string) []ClientSecret {
+	return []ClientSecret{{Id: "u1", Secret: secret, Email: "alice"}}
+}
+
 func TestParseMetricLine(t *testing.T) {
 	name, labels, val, err := parseMetricLine(`mtg_traffic{direction="to_client"} 12345`)
 	if err != nil {
@@ -38,7 +42,9 @@ func TestInstanceFromInbound(t *testing.T) {
 		Listen:   "0.0.0.0",
 		Port:     8443,
 		Protocol: model.MTProto,
-		Settings: `{"fakeTlsDomain":"example.com","secret":"",` +
+		Settings: `{"fakeTlsDomain":"example.com",` +
+			`"clients":[{"id":"u1","email":"alice","secret":"","enable":true},` +
+			`{"id":"u2","email":"bob","secret":"","enable":false}],` +
 			`"debug":true,"proxyProtocolListener":true,"preferIp":"prefer-ipv4",` +
 			`"domainFronting":{"ip":"127.0.0.1","port":9443,"proxyProtocol":true},` +
 			`"routeThroughXray":true,"routeXrayPort":50000}`,
@@ -47,8 +53,12 @@ func TestInstanceFromInbound(t *testing.T) {
 	if !ok {
 		t.Fatal("expected a usable instance")
 	}
-	if inst.Secret == "" {
-		t.Fatal("secret should be healed to a non-empty value")
+	// Only the enabled client is active; its secret is healed.
+	if len(inst.Clients) != 1 || inst.Clients[0].Email != "alice" {
+		t.Fatalf("expected only the enabled client, got %+v", inst.Clients)
+	}
+	if !strings.HasPrefix(inst.Clients[0].Secret, "ee") {
+		t.Fatalf("client secret should be healed: %q", inst.Clients[0].Secret)
 	}
 	if inst.Port != 8443 || inst.Id != 3 {
 		t.Fatalf("bad instance %+v", inst)
@@ -66,57 +76,66 @@ func TestInstanceFromInbound(t *testing.T) {
 	if _, ok := InstanceFromInbound(&model.Inbound{Protocol: model.VLESS}); ok {
 		t.Fatal("non-mtproto inbound should not produce an instance")
 	}
+
+	// No enabled client → no instance.
+	noActive := &model.Inbound{Id: 4, Protocol: model.MTProto, Port: 1,
+		Settings: `{"fakeTlsDomain":"x","clients":[{"id":"u","email":"e","secret":"ee","enable":false}]}`}
+	if _, ok := InstanceFromInbound(noActive); ok {
+		t.Fatal("an inbound with no enabled clients must not produce an instance")
+	}
 }
 
-func TestRenderConfig(t *testing.T) {
-	// A bare instance emits only the required keys and the prometheus block,
-	// with no optional keys and no [domain-fronting] section.
-	bare := renderConfig(Instance{Secret: "ee00", Listen: "0.0.0.0", Port: 8443}, 5000)
-	for _, unwanted := range []string{"debug", "proxy-protocol-listener", "prefer-ip", "[domain-fronting]"} {
+func TestRenderConfigSingle(t *testing.T) {
+	// Single-secret (mtg): emits secret=, [stats.prometheus], no [secrets].
+	bare := renderConfig(Instance{Clients: oneClient("ee00"), Listen: "0.0.0.0", Port: 8443}, 5000)
+	for _, unwanted := range []string{"debug", "proxy-protocol-listener", "prefer-ip", "[domain-fronting]", "[secrets]", "api-bind-to"} {
 		if strings.Contains(bare, unwanted) {
-			t.Fatalf("bare config should not contain %q:\n%s", unwanted, bare)
+			t.Fatalf("bare single config should not contain %q:\n%s", unwanted, bare)
 		}
 	}
-	if !strings.Contains(bare, `bind-to = "0.0.0.0:8443"`) {
-		t.Fatalf("missing bind-to:\n%s", bare)
+	if !strings.Contains(bare, `secret = "ee00"`) || !strings.Contains(bare, `bind-to = "0.0.0.0:8443"`) {
+		t.Fatalf("missing secret/bind-to:\n%s", bare)
 	}
 	if !strings.Contains(bare, "[stats.prometheus]") || !strings.Contains(bare, "127.0.0.1:5000") {
-		t.Fatalf("prometheus block must always be present:\n%s", bare)
+		t.Fatalf("prometheus block must be present in single mode:\n%s", bare)
 	}
+}
 
-	// A fully configured instance emits every option and the fronting section.
-	full := renderConfig(Instance{
-		Secret: "ee11", Listen: "0.0.0.0", Port: 443,
-		Debug: true, ProxyProtocolListener: true, PreferIP: "only-ipv6",
-		FrontingIP: "127.0.0.1", FrontingPort: 9443, FrontingProxyProtocol: true,
-	}, 6000)
+func TestRenderConfigMulti(t *testing.T) {
+	// Multi-user (mtg-multi): emits api-bind-to + [secrets], no secret=, no prometheus.
+	inst := Instance{
+		MultiUser: true, Listen: "0.0.0.0", Port: 443,
+		Clients: []ClientSecret{
+			{Id: "u1", Secret: "eeAAA", Email: "alice"},
+			{Id: "u2", Secret: "eeBBB", Email: "bob"},
+		},
+	}
+	cfg := renderConfig(inst, 6000)
 	for _, want := range []string{
-		"debug = true\n",
-		"proxy-protocol-listener = true\n",
-		`prefer-ip = "only-ipv6"`,
-		"[domain-fronting]",
-		`ip = "127.0.0.1"`,
-		"port = 9443",
-		"proxy-protocol = true\n",
+		`api-bind-to = "127.0.0.1:6000"`,
+		"[secrets]",
+		`u1 = "eeAAA"`,
+		`u2 = "eeBBB"`,
+		`bind-to = "0.0.0.0:443"`,
 	} {
-		if !strings.Contains(full, want) {
-			t.Fatalf("full config missing %q:\n%s", want, full)
+		if !strings.Contains(cfg, want) {
+			t.Fatalf("multi config missing %q:\n%s", want, cfg)
 		}
 	}
-	// TOML requires top-level keys before any [section] header.
-	if strings.Index(full, "prefer-ip") > strings.Index(full, "[domain-fronting]") {
-		t.Fatalf("top-level keys must precede the [domain-fronting] section:\n%s", full)
+	for _, unwanted := range []string{"secret = ", "[stats.prometheus]"} {
+		if strings.Contains(cfg, unwanted) {
+			t.Fatalf("multi config should not contain %q:\n%s", unwanted, cfg)
+		}
 	}
-	if strings.LastIndex(full, "[domain-fronting]") > strings.Index(full, "[stats.prometheus]") {
-		t.Fatalf("[domain-fronting] must precede [stats.prometheus]:\n%s", full)
+	// TOML: api-bind-to (top-level) must precede the [secrets] section.
+	if strings.Index(cfg, "api-bind-to") > strings.Index(cfg, "[secrets]") {
+		t.Fatalf("api-bind-to must precede [secrets]:\n%s", cfg)
 	}
 }
 
 func TestRenderConfigXrayEgress(t *testing.T) {
-	// Routing through Xray emits a [network] proxies upstream pointing at the
-	// loopback SOCKS bridge, before the prometheus block.
 	routed := renderConfig(Instance{
-		Secret: "ee22", Listen: "0.0.0.0", Port: 443,
+		Clients: oneClient("ee22"), Listen: "0.0.0.0", Port: 443,
 		RouteThroughXray: true, XrayRoutePort: 50000,
 	}, 7000)
 	if !strings.Contains(routed, "[network]") ||
@@ -126,11 +145,9 @@ func TestRenderConfigXrayEgress(t *testing.T) {
 	if strings.Index(routed, "[network]") > strings.Index(routed, "[stats.prometheus]") {
 		t.Fatalf("[network] must precede [stats.prometheus]:\n%s", routed)
 	}
-
-	// Without the flag (or without a port) the section is omitted.
 	for _, inst := range []Instance{
-		{Secret: "ee", Listen: "0.0.0.0", Port: 443},
-		{Secret: "ee", Listen: "0.0.0.0", Port: 443, RouteThroughXray: true},
+		{Clients: oneClient("ee"), Listen: "0.0.0.0", Port: 443},
+		{Clients: oneClient("ee"), Listen: "0.0.0.0", Port: 443, RouteThroughXray: true},
 	} {
 		if got := renderConfig(inst, 7000); strings.Contains(got, "[network]") {
 			t.Fatalf("unrouted config must omit [network]:\n%s", got)
@@ -139,8 +156,9 @@ func TestRenderConfigXrayEgress(t *testing.T) {
 }
 
 func TestFingerprintReactsToOptions(t *testing.T) {
-	base := Instance{Secret: "ee", Listen: "0.0.0.0", Port: 443}
+	base := Instance{Clients: oneClient("ee"), Listen: "0.0.0.0", Port: 443}
 	for name, mutate := range map[string]func(*Instance){
+		"multiUser":     func(i *Instance) { i.MultiUser = true },
 		"debug":         func(i *Instance) { i.Debug = true },
 		"listener":      func(i *Instance) { i.ProxyProtocolListener = true },
 		"preferIp":      func(i *Instance) { i.PreferIP = "only-ipv4" },
@@ -149,8 +167,14 @@ func TestFingerprintReactsToOptions(t *testing.T) {
 		"frontingProxy": func(i *Instance) { i.FrontingProxyProtocol = true },
 		"routeXray":     func(i *Instance) { i.RouteThroughXray = true },
 		"routeXrayPort": func(i *Instance) { i.XrayRoutePort = 50000 },
+		"addClient": func(i *Instance) {
+			i.MultiUser = true
+			i.Clients = append(i.Clients, ClientSecret{Id: "u2", Secret: "ee2", Email: "bob"})
+		},
+		"changeSecret": func(i *Instance) { i.Clients = []ClientSecret{{Id: "u1", Secret: "eeXX", Email: "alice"}} },
 	} {
 		changed := base
+		changed.Clients = append([]ClientSecret(nil), base.Clients...)
 		mutate(&changed)
 		if base.fingerprint() == changed.fingerprint() {
 			t.Fatalf("fingerprint must change when %s changes", name)

@@ -24,6 +24,7 @@ import (
 	"github.com/coinman-dev/3ax-ui/v2/config"
 	"github.com/coinman-dev/3ax-ui/v2/database"
 	"github.com/coinman-dev/3ax-ui/v2/logger"
+	"github.com/coinman-dev/3ax-ui/v2/mtproto"
 	"github.com/coinman-dev/3ax-ui/v2/util/common"
 	"github.com/coinman-dev/3ax-ui/v2/util/sys"
 	"github.com/coinman-dev/3ax-ui/v2/wg"
@@ -47,6 +48,14 @@ const (
 	Stop    ProcessState = "stop"    // Process is stopped
 	Error   ProcessState = "error"   // Process is in error state
 )
+
+// MtprotoStatus reports MTProto backend capabilities to the frontend.
+// MultiUser is true when the mtg-multi binary is installed (many users per
+// port); false means single-secret mtg (the UI caps an mtproto inbound at one
+// client).
+type MtprotoStatus struct {
+	MultiUser bool `json:"multiUser"`
+}
 
 // Status represents comprehensive system and application status information.
 // It includes CPU, memory, disk, network statistics, and Xray process status.
@@ -73,12 +82,13 @@ type Status struct {
 		ErrorMsg string       `json:"errorMsg"`
 		Version  string       `json:"version"`
 	} `json:"xray"`
-	Awg      AwgStatus `json:"awg"`
-	Wg       WgStatus  `json:"wg"`
-	Uptime   uint64    `json:"uptime"`
-	Loads    []float64 `json:"loads"`
-	TcpCount int       `json:"tcpCount"`
-	UdpCount int       `json:"udpCount"`
+	Awg      AwgStatus     `json:"awg"`
+	Wg       WgStatus      `json:"wg"`
+	Mtproto  MtprotoStatus `json:"mtproto"`
+	Uptime   uint64        `json:"uptime"`
+	Loads    []float64     `json:"loads"`
+	TcpCount int           `json:"tcpCount"`
+	UdpCount int           `json:"udpCount"`
 	NetIO    struct {
 		Up   uint64 `json:"up"`
 		Down uint64 `json:"down"`
@@ -458,6 +468,9 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 	if wgServer, err := wgService.GetServer(); err == nil {
 		status.Wg.Running = wg.IsInterfaceUp(wgServer.InterfaceName)
 	}
+
+	// MTProto: many-users-per-port is available only when mtg-multi is installed.
+	status.Mtproto.MultiUser = mtproto.MultiUserSupported()
 
 	// Application stats
 	var rtm runtime.MemStats

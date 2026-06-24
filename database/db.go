@@ -201,6 +201,10 @@ func InitDB(dbPath string) error {
 	// an upgrade preserves the installed DNS instead of reverting to defaults.
 	migrateAwgWgDnsSplit()
 
+	// Convert legacy single-secret MTProto inbounds to the unified multi-user
+	// clients[] shape (existing secret becomes client #1; its link keeps working).
+	migrateMtprotoToClients()
+
 	isUsersEmpty, err := isTableEmpty("users")
 	if err != nil {
 		return err
@@ -389,6 +393,93 @@ func migrateMixedHttpAccounts() {
 		}
 		log.Printf("migrateMixedHttpAccounts: migrated %d %s account(s) in inbound %d", len(clients), inbound.Protocol, inbound.Id)
 	}
+}
+
+// migrateMtprotoToClients converts legacy single-secret MTProto inbounds
+// (settings.secret + fakeTlsDomain) into the unified multi-user shape
+// (settings.clients[] with one client carrying the existing secret). The
+// existing user's t.me link (same port + same secret) keeps working, and a
+// client_traffics row is created so it appears in the per-client UI. Idempotent:
+// inbounds already carrying a clients[] array are skipped.
+func migrateMtprotoToClients() {
+	var inbounds []model.Inbound
+	if err := db.Where("protocol = ?", model.MTProto).Find(&inbounds).Error; err != nil {
+		log.Printf("migrateMtprotoToClients: scan inbounds failed: %v", err)
+		return
+	}
+	for i := range inbounds {
+		inbound := &inbounds[i]
+		var settings map[string]any
+		if err := json.Unmarshal([]byte(inbound.Settings), &settings); err != nil {
+			log.Printf("migrateMtprotoToClients: inbound %d settings unmarshal failed: %v", inbound.Id, err)
+			continue
+		}
+		if _, has := settings["clients"]; has {
+			continue // already migrated
+		}
+		secret, _ := settings["secret"].(string)
+		if strings.TrimSpace(secret) == "" {
+			continue // nothing to carry over
+		}
+
+		email := strings.TrimSpace(inbound.Remark)
+		if email == "" {
+			email = fmt.Sprintf("mtproto-%d", inbound.Port)
+		}
+		email = uniqueClientEmail(email)
+
+		nowMs := time.Now().UnixMilli()
+		client := map[string]any{
+			"id":         model.GenerateMtprotoClientID(),
+			"secret":     secret,
+			"email":      email,
+			"enable":     true,
+			"limitIp":    0,
+			"totalGB":    0,
+			"expiryTime": 0,
+			"tgId":       0,
+			"subId":      "",
+			"comment":    "",
+			"reset":      0,
+			"created_at": nowMs,
+			"updated_at": nowMs,
+		}
+		settings["clients"] = []any{client}
+		delete(settings, "secret")
+
+		newSettings, err := json.MarshalIndent(settings, "", "  ")
+		if err != nil {
+			log.Printf("migrateMtprotoToClients: inbound %d marshal failed: %v", inbound.Id, err)
+			continue
+		}
+		if err := db.Model(inbound).Update("settings", string(newSettings)).Error; err != nil {
+			log.Printf("migrateMtprotoToClients: inbound %d save failed: %v", inbound.Id, err)
+			continue
+		}
+		var cnt int64
+		db.Model(&xray.ClientTraffic{}).Where("email = ?", email).Count(&cnt)
+		if cnt == 0 {
+			if err := db.Create(&xray.ClientTraffic{InboundId: inbound.Id, Email: email, Enable: true}).Error; err != nil {
+				log.Printf("migrateMtprotoToClients: inbound %d client_traffics create failed: %v", inbound.Id, err)
+			}
+		}
+		log.Printf("migrateMtprotoToClients: converted inbound %d to 1-client multi-user shape (email %q)", inbound.Id, email)
+	}
+}
+
+// uniqueClientEmail returns base, or base-2, base-3, ... if a client_traffics row
+// with that email already exists (emails are globally unique).
+func uniqueClientEmail(base string) string {
+	email := base
+	for n := 2; n < 1000; n++ {
+		var cnt int64
+		db.Model(&xray.ClientTraffic{}).Where("email = ?", email).Count(&cnt)
+		if cnt == 0 {
+			return email
+		}
+		email = fmt.Sprintf("%s-%d", base, n)
+	}
+	return email
 }
 
 // CloseDB closes the database connection if it exists.

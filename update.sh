@@ -919,9 +919,61 @@ mtg_panel_arch() {
 # Ensures the mtg sidecar is present in the given bin dir as mtg-linux-{FNAME}.
 # No-op when already present (preserved across updates). Fully non-fatal: any
 # failure prints a notice and returns 0 — MTProto inbounds just won't start.
+# mtg-multi (dolonet/mtg-multi) = multi-user MTProto fork; prebuilt only for
+# linux amd64/arm64. Empty otherwise (fall back to single-secret mtg).
+mtg_multi_arch() {
+    case "$(arch)" in
+        amd64) echo "amd64" ;;
+        arm64) echo "arm64" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Installs latest mtg-multi as bin/mtg-multi-linux-{FNAME}; returns 1 on failure.
+install_mtg_multi() {
+    local target_bin_dir="$1"
+    local mm_arch mm_fname mm_ver mm_url tmp_tgz tmp_dir extracted
+    mm_arch=$(mtg_multi_arch)
+    mm_fname=$(mtg_panel_arch)
+    [[ -z "$mm_arch" || -z "$mm_fname" ]] && return 1
+    if [[ -f "$target_bin_dir/mtg-multi-linux-${mm_fname}" ]]; then
+        chmod +x "$target_bin_dir/mtg-multi-linux-${mm_fname}" >/dev/null 2>&1
+        return 0
+    fi
+    mm_ver=$(${curl_bin:-curl} -4 -Ls "https://api.github.com/repos/dolonet/mtg-multi/releases/latest" 2>/dev/null \
+        | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -n1)
+    [[ -z "$mm_ver" ]] && return 1
+    mm_url="https://github.com/dolonet/mtg-multi/releases/download/v${mm_ver}/mtg-multi-${mm_ver}-linux-${mm_arch}.tar.gz"
+    echo -e "${green}Downloading mtg-multi (multi-user MTProto)...${plain}"
+    tmp_tgz="/tmp/mtgmulti.$$.tar.gz"
+    tmp_dir="/tmp/mtgmulti.$$.d"
+    if ! ${curl_bin:-curl} -4fLRo "$tmp_tgz" "$mm_url" >/dev/null 2>&1; then
+        rm -f "$tmp_tgz" >/dev/null 2>&1
+        return 1
+    fi
+    mkdir -p "$tmp_dir" "$target_bin_dir" >/dev/null 2>&1
+    if tar -xzf "$tmp_tgz" -C "$tmp_dir" >/dev/null 2>&1; then
+        extracted=$(find "$tmp_dir" -type f -name mtg-multi 2>/dev/null | head -n1)
+        if [[ -n "$extracted" ]]; then
+            mv -f "$extracted" "$target_bin_dir/mtg-multi-linux-${mm_fname}" >/dev/null 2>&1
+            chmod +x "$target_bin_dir/mtg-multi-linux-${mm_fname}" >/dev/null 2>&1
+            rm -f "$target_bin_dir/mtg-linux-${mm_fname}" >/dev/null 2>&1
+            echo -e "${green}mtg-multi installed (multi-user MTProto).${plain}"
+            rm -rf "$tmp_tgz" "$tmp_dir" >/dev/null 2>&1
+            return 0
+        fi
+    fi
+    rm -rf "$tmp_tgz" "$tmp_dir" >/dev/null 2>&1
+    return 1
+}
+
 install_mtg() {
     local target_bin_dir="$1"
     local mtg_arch mtg_fname mtg_url tmp_tgz tmp_dir extracted
+    # Prefer the multi-user mtg-multi fork where a prebuilt binary exists.
+    if install_mtg_multi "$target_bin_dir"; then
+        return 0
+    fi
     mtg_arch=$(mtg_release_arch)
     mtg_fname=$(mtg_panel_arch)
     if [[ -z "$mtg_arch" || -z "$mtg_fname" ]]; then

@@ -69,3 +69,41 @@ func TestHealMtprotoSecret(t *testing.T) {
 		t.Fatal("expected no change when fakeTlsDomain is missing")
 	}
 }
+
+func TestHealMtprotoClients(t *testing.T) {
+	domain := "www.cloudflare.com"
+	suffix := hex.EncodeToString([]byte(domain))
+
+	// Two clients: one with no id and empty secret, one already-valid.
+	valid := GenerateFakeTLSSecret(domain)
+	in := `{"fakeTlsDomain":"www.cloudflare.com","clients":[` +
+		`{"email":"alice","secret":"","enable":true},` +
+		`{"id":"abc123","email":"bob","secret":"` + valid + `","enable":true}]}`
+	out, changed := HealMtprotoClients(in)
+	if !changed {
+		t.Fatal("expected heal to fill id + secret for the first client")
+	}
+	_, clients := ParseMtprotoClients(out)
+	if len(clients) != 2 {
+		t.Fatalf("expected 2 clients, got %d", len(clients))
+	}
+	for _, c := range clients {
+		if strings.TrimSpace(c.Id) == "" {
+			t.Fatalf("client %q has no id", c.Email)
+		}
+		if !strings.HasPrefix(c.Secret, "ee") || !strings.HasSuffix(c.Secret, suffix) {
+			t.Fatalf("client %q secret malformed: %q", c.Email, c.Secret)
+		}
+	}
+	if clients[1].Id != "abc123" || clients[1].Secret != valid {
+		t.Fatal("an already-valid client must be left untouched")
+	}
+	// Idempotent.
+	if _, changed2 := HealMtprotoClients(out); changed2 {
+		t.Fatal("expected no change on a fully-healed settings blob")
+	}
+	// Legacy single-secret shape (no clients[]) is left alone here.
+	if _, changed3 := HealMtprotoClients(`{"fakeTlsDomain":"x","secret":"ee"}`); changed3 {
+		t.Fatal("HealMtprotoClients must not touch a legacy single-secret blob")
+	}
+}

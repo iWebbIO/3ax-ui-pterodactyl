@@ -155,31 +155,51 @@ jobs:
                   wget -q -O geosite_RU.dat https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
                   mv xray xray-linux-${{ matrix.platform }}
 
-                  # Download mtg (MTProto FakeTLS sidecar, github.com/9seconds/mtg).
-                  # Not every release arch has a prebuilt mtg binary (s390x has
-                  # none); skip those — MTProto is simply unavailable there and the
-                  # panel is otherwise unaffected. armv5 falls back to the armv6
-                  # build (true ARMv5 hardware is effectively extinct).
-                  MTG_VER="2.2.8"
+                  # MTProto sidecar. amd64/arm64 get the multi-user mtg-multi fork
+                  # (dolonet/mtg-multi, latest release — many client secrets on one
+                  # port); other arches get single-secret mtg (github.com/9seconds/mtg).
+                  # s390x has neither prebuilt → MTProto unavailable there.
                   case "${{ matrix.platform }}" in
-                    amd64) MTG_ARCH="amd64" ;;
-                    arm64) MTG_ARCH="arm64" ;;
-                    armv7) MTG_ARCH="armv7" ;;
-                    armv6|armv5) MTG_ARCH="armv6" ;;
-                    386) MTG_ARCH="386" ;;
-                    *) MTG_ARCH="" ;;
+                    amd64) MM_ARCH="amd64" ;;
+                    arm64) MM_ARCH="arm64" ;;
+                    *) MM_ARCH="" ;;
                   esac
-                  if [ -n "$MTG_ARCH" ]; then
-                    if wget -q "https://github.com/9seconds/mtg/releases/download/v${MTG_VER}/mtg-${MTG_VER}-linux-${MTG_ARCH}.tar.gz"; then
-                      tar -xzf "mtg-${MTG_VER}-linux-${MTG_ARCH}.tar.gz"
-                      mv "mtg-${MTG_VER}-linux-${MTG_ARCH}/mtg" "mtg-linux-${{ matrix.platform }}" 2>/dev/null || mv mtg "mtg-linux-${{ matrix.platform }}"
-                      rm -rf "mtg-${MTG_VER}-linux-${MTG_ARCH}" "mtg-${MTG_VER}-linux-${MTG_ARCH}.tar.gz"
-                      chmod +x "mtg-linux-${{ matrix.platform }}"
+                  MM_DONE=""
+                  if [ -n "$MM_ARCH" ]; then
+                    MM_VER=$(curl -fsSL "https://api.github.com/repos/dolonet/mtg-multi/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -n1)
+                    if [ -n "$MM_VER" ] && wget -q "https://github.com/dolonet/mtg-multi/releases/download/v${MM_VER}/mtg-multi-${MM_VER}-linux-${MM_ARCH}.tar.gz"; then
+                      tar -xzf "mtg-multi-${MM_VER}-linux-${MM_ARCH}.tar.gz"
+                      mv "mtg-multi-${MM_VER}-linux-${MM_ARCH}/mtg-multi" "mtg-multi-linux-${{ matrix.platform }}" 2>/dev/null || mv mtg-multi "mtg-multi-linux-${{ matrix.platform }}"
+                      rm -rf "mtg-multi-${MM_VER}-linux-${MM_ARCH}" "mtg-multi-${MM_VER}-linux-${MM_ARCH}.tar.gz"
+                      chmod +x "mtg-multi-linux-${{ matrix.platform }}"
+                      MM_DONE="1"
+                      echo "bundled mtg-multi ${MM_VER} (multi-user MTProto) for ${{ matrix.platform }}"
                     else
-                      echo "mtg download failed for ${MTG_ARCH}; MTProto unavailable on ${{ matrix.platform }}"
+                      echo "mtg-multi download failed for ${{ matrix.platform }}; falling back to single-secret mtg"
                     fi
-                  else
-                    echo "No prebuilt mtg for ${{ matrix.platform }}; MTProto unavailable on this arch"
+                  fi
+                  if [ -z "$MM_DONE" ]; then
+                    MTG_VER="2.2.8"
+                    case "${{ matrix.platform }}" in
+                      amd64) MTG_ARCH="amd64" ;;
+                      arm64) MTG_ARCH="arm64" ;;
+                      armv7) MTG_ARCH="armv7" ;;
+                      armv6|armv5) MTG_ARCH="armv6" ;;
+                      386) MTG_ARCH="386" ;;
+                      *) MTG_ARCH="" ;;
+                    esac
+                    if [ -n "$MTG_ARCH" ]; then
+                      if wget -q "https://github.com/9seconds/mtg/releases/download/v${MTG_VER}/mtg-${MTG_VER}-linux-${MTG_ARCH}.tar.gz"; then
+                        tar -xzf "mtg-${MTG_VER}-linux-${MTG_ARCH}.tar.gz"
+                        mv "mtg-${MTG_VER}-linux-${MTG_ARCH}/mtg" "mtg-linux-${{ matrix.platform }}" 2>/dev/null || mv mtg "mtg-linux-${{ matrix.platform }}"
+                        rm -rf "mtg-${MTG_VER}-linux-${MTG_ARCH}" "mtg-${MTG_VER}-linux-${MTG_ARCH}.tar.gz"
+                        chmod +x "mtg-linux-${{ matrix.platform }}"
+                      else
+                        echo "mtg download failed for ${MTG_ARCH}; MTProto unavailable on ${{ matrix.platform }}"
+                      fi
+                    else
+                      echo "No prebuilt MTProto sidecar for ${{ matrix.platform }}; MTProto unavailable on this arch"
+                    fi
                   fi
                   cd ../..
 

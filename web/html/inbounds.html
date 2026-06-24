@@ -1789,6 +1789,7 @@
                                 email: c.email,
                                 up: c.upload || 0,
                                 down: c.download || 0,
+                                allTime: c.allTime || 0,
                                 total: c.totalGB || 0,
                                 expiryTime: c.expiryTime || 0,
                             }));
@@ -1863,7 +1864,11 @@
                                 updated_at: c.updatedAt || 0,
                             }));
                             inbound.settings = JSON.stringify({ clients });
-                            // Map AWG client traffic to clientStats format
+                            // Map AWG client traffic to clientStats format.
+                            // allTime is the lifetime total (preserved across
+                            // interface restarts); without it the per-client
+                            // "Total traffic" column falls back to the current
+                            // session up+down and shows 0 after a restart.
                             inbound.clientStats = awgMsg.obj.map((c) => ({
                                 id: c.id,
                                 uuid: c.uuid || "",
@@ -1872,6 +1877,7 @@
                                 email: c.email,
                                 up: c.upload || 0,
                                 down: c.download || 0,
+                                allTime: c.allTime || 0,
                                 total: c.totalGB || 0,
                                 expiryTime: c.expiryTime || 0,
                             }));

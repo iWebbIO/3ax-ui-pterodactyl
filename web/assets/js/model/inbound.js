@@ -1634,6 +1634,7 @@ class Inbound extends XrayCommonClass {
             case Protocols.NATIVEWG: return this.settings ? this.settings.clients : null;
             case Protocols.MIXED: return this.settings ? this.settings.clients : null;
             case Protocols.HTTP: return this.settings ? this.settings.clients : null;
+            case Protocols.MTPROTO: return this.settings ? this.settings.clients : null;
             case Protocols.HYSTERIA: return this.settings.hysterias;
             default: return null;
         }
@@ -2259,19 +2260,20 @@ class Inbound extends XrayCommonClass {
                 return this.genTrojanLink(address, port, forceTls, remark, client.password);
             case Protocols.HYSTERIA:
                 return this.genHysteriaLink(address, port, remark, client.auth.length > 0 ? client.auth : this.stream.hysteria.auth);
+            case Protocols.MTPROTO:
+                return this.genMtprotoLink(address, port, remark, client);
             default: return '';
         }
     }
 
-    // MTProto proxies share a single FakeTLS secret across all users, so there
-    // is one Telegram share link per inbound (no per-client links). The secret
-    // is the hex value stored in settings; Telegram accepts it in t.me/proxy.
-    genMtprotoLink(address = '', port = this.port, remark = '') {
+    // One Telegram share link per MTProto CLIENT, using that client's own
+    // FakeTLS secret (Telegram accepts the hex secret in t.me/proxy).
+    genMtprotoLink(address = '', port = this.port, remark = '', client) {
         let addr = address;
         if (ObjectUtil.isEmpty(addr)) {
             addr = !ObjectUtil.isEmpty(this.listen) && this.listen !== "0.0.0.0" ? this.listen : location.hostname;
         }
-        const secret = (this.settings && this.settings.secret) ? this.settings.secret : '';
+        const secret = (client && client.secret) ? client.secret : '';
         return `https://t.me/proxy?server=${addr}&port=${port}&secret=${secret}`;
     }
 
@@ -2320,9 +2322,6 @@ class Inbound extends XrayCommonClass {
             if (this.protocol == Protocols.SHADOWSOCKS && !this.isSSMultiUser) return this.genSSLink(addr, this.port, 'same', remark);
             if (this.protocol == Protocols.WIREGUARD) {
                 return this.genWireguardConfigs(remark, remarkModel);
-            }
-            if (this.protocol == Protocols.MTPROTO) {
-                return this.genMtprotoLink(addr, this.port, remark);
             }
             return '';
         }
@@ -3584,49 +3583,38 @@ Inbound.NativewgSettings.WgPeer = class extends XrayCommonClass {
     }
 };
 
-// MTProto (FakeTLS) inbound — served by an external mtg sidecar, not Xray.
-// One proxy = one shared FakeTLS secret derived from the fronting domain;
-// there are no per-client users. The backend heals `secret` on save so it
-// always matches `fakeTlsDomain`.
+// MTProto (FakeTLS) inbound — served by an external mtg / mtg-multi sidecar, not
+// Xray. With mtg-multi (amd64/arm64) it serves many per-client secrets on one
+// port; with single-secret mtg the UI caps it at one client. fakeTlsDomain /
+// routeThroughXray / outboundTag are per-inbound; each client carries its own
+// FakeTLS secret (backend-generated/healed on save) + id (the [secrets] key).
 Inbound.MtprotoSettings = class extends Inbound.Settings {
     constructor(
         protocol,
-        secret = '',
+        clients = [new Inbound.MtprotoSettings.MtprotoClient()],
         fakeTlsDomain = 'www.cloudflare.com',
         routeThroughXray = false,
         outboundTag = '',
     ) {
         super(protocol);
-        this.secret = secret;
+        this.clients = clients;
         this.fakeTlsDomain = fakeTlsDomain;
-        // When enabled, mtg dials Telegram through a loopback SOCKS bridge the
-        // panel injects into Xray, routed to outboundTag — useful when Telegram
-        // is blocked on the panel host. routeXrayPort is backend-owned.
         this.routeThroughXray = routeThroughXray;
         this.outboundTag = outboundTag;
     }
 
-    // Build the FakeTLS secret client-side so the operator can preview it
-    // before saving: "ee" + 16 random bytes (hex) + hex(fakeTlsDomain). The
-    // backend re-derives the same shape on save, so a value generated here
-    // survives unchanged as long as the domain is unchanged.
-    genSecret() {
-        const dom = (this.fakeTlsDomain || '').trim();
-        const buf = new Uint8Array(16);
-        (window.crypto || window.msCrypto).getRandomValues(buf);
-        let rand = '';
-        buf.forEach(b => rand += b.toString(16).padStart(2, '0'));
-        let domHex = '';
-        for (let i = 0; i < dom.length; i++) {
-            domHex += dom.charCodeAt(i).toString(16).padStart(2, '0');
-        }
-        this.secret = 'ee' + rand + domHex;
+    addClient(client) {
+        this.clients.push(client ? client : new Inbound.MtprotoSettings.MtprotoClient());
+    }
+
+    delClient(index) {
+        this.clients.splice(index, 1);
     }
 
     static fromJson(json = {}) {
         return new Inbound.MtprotoSettings(
             Protocols.MTPROTO,
-            json.secret,
+            (json.clients || []).map(c => Inbound.MtprotoSettings.MtprotoClient.fromJson(c)),
             json.fakeTlsDomain,
             json.routeThroughXray,
             json.outboundTag,
@@ -3635,10 +3623,40 @@ Inbound.MtprotoSettings = class extends Inbound.Settings {
 
     toJson() {
         return {
-            secret: this.secret,
+            clients: Inbound.MtprotoSettings.toJsonArray(this.clients),
             fakeTlsDomain: this.fakeTlsDomain,
             routeThroughXray: this.routeThroughXray,
             outboundTag: this.routeThroughXray ? (this.outboundTag || '') : '',
         };
+    }
+};
+
+Inbound.MtprotoSettings.MtprotoClient = class extends Inbound.ClientBase {
+    constructor(
+        secret = '',
+        email = RandomUtil.randomLowerAndNum(8),
+        limitIp, totalGB, expiryTime, enable, tgId, subId, comment, reset, created_at, updated_at,
+    ) {
+        super(email, limitIp, totalGB, expiryTime, enable, tgId, subId, comment, reset, created_at, updated_at);
+        // secret + id are backend-owned: empty on a new client, filled on save.
+        this.secret = secret;
+        this.id = '';
+    }
+
+    toJson() {
+        return {
+            id: this.id,
+            secret: this.secret,
+            ...this._clientBaseToJson(),
+        };
+    }
+
+    static fromJson(json = {}) {
+        const c = new Inbound.MtprotoSettings.MtprotoClient(
+            json.secret,
+            ...Inbound.ClientBase.commonArgsFromJson(json),
+        );
+        c.id = json.id || '';
+        return c;
     }
 };

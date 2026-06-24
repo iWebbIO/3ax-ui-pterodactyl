@@ -1631,13 +1631,70 @@ mtg_panel_arch() {
     esac
 }
 
-# Downloads the mtg sidecar binary into the given bin dir as mtg-linux-{FNAME}.
-# MTProto inbounds run one mtg process each; the panel itself runs fine without
-# it (those inbounds simply won't start). Therefore this is fully non-fatal:
-# any failure prints a notice and returns 0 so the install proceeds.
+# mtg-multi (dolonet/mtg-multi) is the multi-user fork — many client secrets on
+# one port. It ships prebuilt only for linux amd64/arm64; other arches fall back
+# to single-secret mtg. Empty when no mtg-multi binary exists for this arch.
+mtg_multi_arch() {
+    case "$(arch)" in
+        amd64) echo "amd64" ;;
+        arm64) echo "arm64" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Installs mtg-multi (latest release) as bin/mtg-multi-linux-{FNAME}. Returns 0
+# on success, 1 otherwise (caller then falls back to single-secret mtg).
+install_mtg_multi() {
+    local target_bin_dir="$1"
+    local mm_arch mm_fname mm_ver mm_url tmp_tgz tmp_dir extracted
+    mm_arch=$(mtg_multi_arch)
+    mm_fname=$(mtg_panel_arch)
+    [[ -z "$mm_arch" || -z "$mm_fname" ]] && return 1
+    if [[ -f "$target_bin_dir/mtg-multi-linux-${mm_fname}" ]]; then
+        chmod +x "$target_bin_dir/mtg-multi-linux-${mm_fname}"
+        return 0
+    fi
+    # Resolve the latest mtg-multi tag (the user opted for "always latest").
+    mm_ver=$(curl -4 -Ls "https://api.github.com/repos/dolonet/mtg-multi/releases/latest" 2>/dev/null \
+        | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -n1)
+    [[ -z "$mm_ver" ]] && return 1
+    mm_url="https://github.com/dolonet/mtg-multi/releases/download/v${mm_ver}/mtg-multi-${mm_ver}-linux-${mm_arch}.tar.gz"
+    echo -e "${green}Downloading mtg-multi (multi-user MTProto) ${mm_url}...${plain}"
+    tmp_tgz="/tmp/mtgmulti.$$.tar.gz"
+    tmp_dir="/tmp/mtgmulti.$$.d"
+    if ! curl -4fLRo "$tmp_tgz" "$mm_url"; then
+        rm -f "$tmp_tgz"
+        return 1
+    fi
+    mkdir -p "$tmp_dir" "$target_bin_dir"
+    if tar -xzf "$tmp_tgz" -C "$tmp_dir" 2>/dev/null; then
+        extracted=$(find "$tmp_dir" -type f -name mtg-multi 2>/dev/null | head -n1)
+        if [[ -n "$extracted" ]]; then
+            mv -f "$extracted" "$target_bin_dir/mtg-multi-linux-${mm_fname}"
+            chmod +x "$target_bin_dir/mtg-multi-linux-${mm_fname}"
+            # A leftover single-secret mtg would be ignored (mtg-multi is preferred)
+            # but remove it to keep detection unambiguous.
+            rm -f "$target_bin_dir/mtg-linux-${mm_fname}" 2>/dev/null
+            echo -e "${green}  mtg-multi installed as bin/mtg-multi-linux-${mm_fname} (multi-user MTProto).${plain}"
+            rm -rf "$tmp_tgz" "$tmp_dir"
+            return 0
+        fi
+    fi
+    rm -rf "$tmp_tgz" "$tmp_dir"
+    return 1
+}
+
+# Installs the MTProto sidecar into the given bin dir: prefer the multi-user
+# mtg-multi fork (amd64/arm64), else single-secret mtg. The panel detects which
+# binary is present and adapts. Fully non-fatal: any failure prints a notice and
+# returns 0 so the install proceeds (MTProto inbounds simply won't start).
 install_mtg() {
     local target_bin_dir="$1"
     local mtg_arch mtg_fname mtg_url tmp_tgz tmp_dir extracted
+    # Prefer multi-user mtg-multi where it ships a prebuilt binary.
+    if install_mtg_multi "$target_bin_dir"; then
+        return 0
+    fi
     mtg_arch=$(mtg_release_arch)
     mtg_fname=$(mtg_panel_arch)
     if [[ -z "$mtg_arch" || -z "$mtg_fname" ]]; then

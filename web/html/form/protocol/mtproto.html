@@ -16,21 +16,6 @@
     <template slot="label">
       <a-tooltip>
         <template slot="title">
-          <span>{{ i18n "pages.inbounds.mtproto.secretDesc" }}</span>
-        </template>
-        {{ i18n "pages.inbounds.mtproto.secret" }}
-        <a-icon type="sync" @click="inbound.settings.genSecret()"></a-icon>
-      </a-tooltip>
-    </template>
-    <a-input
-      v-model.trim="inbound.settings.secret"
-      placeholder='{{ i18n "pages.inbounds.mtproto.secretPlaceholder" }}'
-    ></a-input>
-  </a-form-item>
-  <a-form-item>
-    <template slot="label">
-      <a-tooltip>
-        <template slot="title">
           <span>{{ i18n "pages.inbounds.mtproto.routeDesc" }}</span>
         </template>
         {{ i18n "pages.inbounds.mtproto.route" }}
@@ -53,4 +38,11 @@
     ></a-input>
   </a-form-item>
 </a-form>
+<!-- First client on create; further clients are added via the client table on
+     the inbounds list. The per-client FakeTLS secret is generated on save. -->
+<a-collapse activeKey="0" v-for="(client, index) in inbound.settings.clients.slice(0,1)" v-if="!isEdit">
+  <a-collapse-panel header='{{ i18n "pages.inbounds.client" }}'>
+    {{template "form/client" .}}
+  </a-collapse-panel>
+</a-collapse>
 {{end}}

@@ -51,25 +51,44 @@ func (j *MtprotoJob) Run() {
 	if len(deltas) == 0 {
 		return
 	}
-	traffics := make([]*xray.Traffic, 0, len(deltas))
+	// Fold each scraped delta into both the per-client traffic (by email) and an
+	// aggregate per-inbound counter (by tag), mirroring how client-bearing
+	// protocols are metered.
+	clientTraffics := make([]*xray.ClientTraffic, 0, len(deltas))
+	inboundAgg := make(map[string]*xray.Traffic)
 	for _, d := range deltas {
-		// Routed inbounds egress through the Xray SOCKS bridge, which carries the
-		// inbound's tag and is metered by xray_traffic_job. Folding mtg's own
-		// metrics in too would double-count, so skip them here.
+		// Per-client deltas come from the proxy's /stats and are valid regardless
+		// of egress mode, so always meter them (per-client quotas/usage).
+		if d.Email != "" {
+			clientTraffics = append(clientTraffics, &xray.ClientTraffic{
+				Email: d.Email,
+				Up:    d.Up,
+				Down:  d.Down,
+			})
+		}
+		// The inbound aggregate, however, is double-counted for routed inbounds:
+		// their egress goes through the Xray SOCKS bridge (tagged with the
+		// inbound's tag) which xray_traffic_job already meters. Skip the aggregate
+		// for those; keep it for direct inbounds.
 		if routedTags[d.Tag] {
 			continue
 		}
-		traffics = append(traffics, &xray.Traffic{
-			IsInbound: true,
-			Tag:       d.Tag,
-			Up:        d.Up,
-			Down:      d.Down,
-		})
+		agg := inboundAgg[d.Tag]
+		if agg == nil {
+			agg = &xray.Traffic{IsInbound: true, Tag: d.Tag}
+			inboundAgg[d.Tag] = agg
+		}
+		agg.Up += d.Up
+		agg.Down += d.Down
 	}
-	if len(traffics) == 0 {
+	if len(clientTraffics) == 0 && len(inboundAgg) == 0 {
 		return
 	}
-	if _, _, err := j.inboundService.AddTraffic(traffics, nil); err != nil {
+	traffics := make([]*xray.Traffic, 0, len(inboundAgg))
+	for _, t := range inboundAgg {
+		traffics = append(traffics, t)
+	}
+	if _, _, err := j.inboundService.AddTraffic(traffics, clientTraffics); err != nil {
 		logger.Warning("mtproto job: add traffic failed:", err)
 	}
 }

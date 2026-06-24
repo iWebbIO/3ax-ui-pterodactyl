@@ -173,6 +173,7 @@ class DBInbound {
             case Protocols.MIXED:
             case Protocols.HTTP:
             case Protocols.HYSTERIA:
+            case Protocols.MTPROTO:
                 return true;
             case Protocols.SHADOWSOCKS:
                 return this.toInbound().isSSMultiUser;
@@ -188,6 +189,7 @@ class DBInbound {
             case Protocols.TROJAN:
             case Protocols.SHADOWSOCKS:
             case Protocols.HYSTERIA:
+            case Protocols.MTPROTO:
                 return true;
             default:
                 return false;

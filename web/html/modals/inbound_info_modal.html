@@ -474,21 +474,6 @@
               <code>[[ link.link ]]</code>
             </tr-info-row>
           </template>
-          <template v-if="dbInbound.isMtproto && infoModal.mtprotoLink">
-            <a-divider>{{ i18n "pages.inbounds.mtproto.shareLink" }}</a-divider>
-            <tr-info-row class="tr-info-row">
-              <tr-info-title class="tr-info-title">
-                <a-tag color="blue">Telegram</a-tag>
-                <a-tooltip title='{{ i18n "copy" }}'>
-                  <a-button :style="{ minWidth: '24px' }" size="small"
-                    icon="snippets" @click="copy(infoModal.mtprotoLink)"></a-button>
-                </a-tooltip>
-              </tr-info-title>
-              <div
-                :style="{ borderRadius: '0.5rem', padding: '0.5rem', fontFamily: 'monospace', fontSize: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }"
-                class="client-table-odd-row">[[ infoModal.mtprotoLink ]]</div>
-            </tr-info-row>
-          </template>
           <table v-if="inbound.protocol == Protocols.TUNNEL"
             class="tr-info-table">
             <tr>
@@ -707,7 +692,6 @@
     clientIpsArray: [],
     awgConfig: '',
     wgConfig: '',
-    mtprotoLink: '',
     show(dbInbound, index) {
       this.index = index;
       this.inbound = dbInbound.toInbound();
@@ -717,7 +701,6 @@
       this.clientStats = this.inbound.clients ? this.findClientStats() : null;
       this.awgConfig = '';
       this.wgConfig = '';
-      this.mtprotoLink = '';
 
       if (
         [
@@ -742,9 +725,6 @@
         this.links = [];
       } else if (this.inbound.protocol == Protocols.WIREGUARD) {
         this.links = this.inbound.genInboundLinks(dbInbound.remark).split('\r\n')
-      } else if (this.inbound.protocol == Protocols.MTPROTO) {
-        this.mtprotoLink = this.inbound.genMtprotoLink('', this.inbound.port, dbInbound.remark);
-        this.links = [];
       } else {
         this.links = this.inbound.genAllLinks(this.dbInbound.remark, app.remarkModel, this.clientSettings);
       }
