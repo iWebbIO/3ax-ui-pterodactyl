@@ -83,7 +83,7 @@ func (s *MtprotoClientService) AddClient(client *model.MtprotoClient) error {
 	var count int64
 	db.Model(&model.MtprotoClient{}).Where("uuid = ?", client.Uuid).Count(&count)
 	if count > 0 {
-		return errors.New("MTProto client with this UUID already exists")
+		return errors.New("a client with this UUID already exists")
 	}
 
 	domain := model.MtprotoFakeTLSDomain(ib.Settings)
