@@ -43,22 +43,25 @@ func TestInstanceFromInbound(t *testing.T) {
 		Port:     8443,
 		Protocol: model.MTProto,
 		Settings: `{"fakeTlsDomain":"example.com",` +
-			`"clients":[{"id":"u1","email":"alice","secret":"","enable":true},` +
-			`{"id":"u2","email":"bob","secret":"","enable":false}],` +
 			`"debug":true,"proxyProtocolListener":true,"preferIp":"prefer-ipv4",` +
 			`"domainFronting":{"ip":"127.0.0.1","port":9443,"proxyProtocol":true},` +
 			`"routeThroughXray":true,"routeXrayPort":50000}`,
 	}
-	inst, ok := InstanceFromInbound(ib)
+	// Clients come from the dedicated table (pre-healed secrets), passed in.
+	clients := []model.MtprotoClient{
+		{Uuid: "u1", Email: "alice", Secret: "eeAAAA", Enable: true},
+		{Uuid: "u2", Email: "bob", Secret: "eeBBBB", Enable: false},
+	}
+	inst, ok := InstanceFromInbound(ib, clients)
 	if !ok {
 		t.Fatal("expected a usable instance")
 	}
-	// Only the enabled client is active; its secret is healed.
+	// Only the enabled client is active; its uuid/secret are carried through.
 	if len(inst.Clients) != 1 || inst.Clients[0].Email != "alice" {
 		t.Fatalf("expected only the enabled client, got %+v", inst.Clients)
 	}
-	if !strings.HasPrefix(inst.Clients[0].Secret, "ee") {
-		t.Fatalf("client secret should be healed: %q", inst.Clients[0].Secret)
+	if inst.Clients[0].Id != "u1" || inst.Clients[0].Secret != "eeAAAA" {
+		t.Fatalf("client identity not carried: %+v", inst.Clients[0])
 	}
 	if inst.Port != 8443 || inst.Id != 3 {
 		t.Fatalf("bad instance %+v", inst)
@@ -73,14 +76,14 @@ func TestInstanceFromInbound(t *testing.T) {
 		t.Fatalf("xray routing not parsed: %+v", inst)
 	}
 
-	if _, ok := InstanceFromInbound(&model.Inbound{Protocol: model.VLESS}); ok {
+	if _, ok := InstanceFromInbound(&model.Inbound{Protocol: model.VLESS}, nil); ok {
 		t.Fatal("non-mtproto inbound should not produce an instance")
 	}
 
 	// No enabled client → no instance.
-	noActive := &model.Inbound{Id: 4, Protocol: model.MTProto, Port: 1,
-		Settings: `{"fakeTlsDomain":"x","clients":[{"id":"u","email":"e","secret":"ee","enable":false}]}`}
-	if _, ok := InstanceFromInbound(noActive); ok {
+	noActive := &model.Inbound{Id: 4, Protocol: model.MTProto, Port: 1, Settings: `{"fakeTlsDomain":"x"}`}
+	noActiveClients := []model.MtprotoClient{{Uuid: "u", Email: "e", Secret: "ee", Enable: false}}
+	if _, ok := InstanceFromInbound(noActive, noActiveClients); ok {
 		t.Fatal("an inbound with no enabled clients must not produce an instance")
 	}
 }
@@ -114,8 +117,8 @@ func TestRenderConfigMulti(t *testing.T) {
 	for _, want := range []string{
 		`api-bind-to = "127.0.0.1:6000"`,
 		"[secrets]",
-		`u1 = "eeAAA"`,
-		`u2 = "eeBBB"`,
+		`"u1" = "eeAAA"`,
+		`"u2" = "eeBBB"`,
 		`bind-to = "0.0.0.0:443"`,
 	} {
 		if !strings.Contains(cfg, want) {

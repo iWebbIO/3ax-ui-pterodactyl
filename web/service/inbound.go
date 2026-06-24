@@ -532,55 +532,68 @@ func (s *InboundService) addMtprotoInbound(inbound *model.Inbound) (*model.Inbou
 	if inbound.Tag == "" {
 		inbound.Tag = fmt.Sprintf("inbound-%v", inbound.Port)
 	}
-	// Normalise each client's FakeTLS secret + id so they match the configured
-	// domain before the values reach the proxy or a client share link.
-	if healed, ok := model.HealMtprotoClients(inbound.Settings); ok {
-		inbound.Settings = healed
-	}
-	// Client emails are the unique per-user key (shared with ClientStats).
-	existEmail, err := s.checkEmailExistForInbound(inbound)
-	if err != nil {
-		return inbound, false, err
-	}
-	if existEmail != "" {
-		return inbound, false, common.NewError("Duplicate email:", existEmail)
-	}
+	// The inbound's settings hold only inbound-level config; clients live in the
+	// dedicated mtproto_clients table. Pull the optional first client off the
+	// create form, then strip the client list from settings.
+	firstClient := firstMtprotoFormClient(inbound.Settings)
+	inbound.Settings = stripMtprotoClients(inbound.Settings)
+
 	// Allocate the loopback egress port when routing through Xray is enabled.
 	if err := s.normalizeMtprotoXrayPort(inbound, ""); err != nil {
 		return inbound, false, err
 	}
 
-	clients, err := s.GetClients(inbound)
-	if err != nil {
+	if err := database.GetDB().Save(inbound).Error; err != nil {
 		return inbound, false, err
 	}
-
-	db := database.GetDB()
-	tx := db.Begin()
-	defer func() {
-		if err == nil {
-			tx.Commit()
-		} else {
-			tx.Rollback()
-		}
-	}()
-
-	err = tx.Save(inbound).Error
-	if err != nil {
-		return inbound, false, err
-	}
-	// One ClientStats row per client so per-user traffic/expiry/quota work.
-	for i := range clients {
-		if clients[i].Email == "" {
-			continue
-		}
-		if err = s.AddClientStat(tx, inbound.Id, &clients[i]); err != nil {
+	// Seed the first client row (the create form may carry one). Email may be any
+	// string — duplicates are allowed; the unique identity is the generated Uuid.
+	if firstClient != nil {
+		firstClient.InboundId = inbound.Id
+		if err := (&MtprotoClientService{}).AddClient(firstClient); err != nil {
 			return inbound, false, err
 		}
 	}
-	// The reconcile job (every 10s) starts the proxy for the new inbound. A
-	// restart is only needed when an egress SOCKS bridge must be added to Xray.
+	// The reconcile job (every 10s) starts the proxy; AddClient already reconciled
+	// it immediately. A restart is only needed to add the egress SOCKS bridge.
 	return inbound, mtprotoRoutesThroughXray(inbound), nil
+}
+
+// firstMtprotoFormClient extracts the optional first client from an mtproto
+// inbound-create form (settings.clients[0]) as a MtprotoClient row seed, or nil.
+// It parses tolerantly because the browser stores some numeric fields (tgId) as
+// strings.
+func firstMtprotoFormClient(settings string) *model.MtprotoClient {
+	_, _, seeds := model.ParseMtprotoSettingsClients(settings)
+	if len(seeds) == 0 {
+		return nil
+	}
+	c := seeds[0]
+	if strings.TrimSpace(c.Email) == "" {
+		return nil
+	}
+	// A freshly-created client defaults to enabled when the form omits the flag.
+	enable := c.Enable || !c.HasEnable
+	return &model.MtprotoClient{
+		Email: c.Email, Enable: enable, LimitIp: c.LimitIp, TotalGB: c.TotalGB,
+		ExpiryTime: c.ExpiryTime, TgId: c.TgId, SubId: c.SubId, Comment: c.Comment, Reset: c.Reset,
+	}
+}
+
+// stripMtprotoClients removes the client list / legacy secret from an mtproto
+// inbound's settings JSON, keeping only inbound-level configuration.
+func stripMtprotoClients(settings string) string {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(settings), &m); err != nil {
+		return settings
+	}
+	delete(m, "clients")
+	delete(m, "secret")
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return settings
+	}
+	return string(out)
 }
 
 // updateMtprotoInbound updates an existing MTProto inbound's DB record. The
@@ -601,13 +614,10 @@ func (s *InboundService) updateMtprotoInbound(inbound *model.Inbound) (*model.In
 	}
 	wasRouted := mtprotoRoutesThroughXray(oldInbound)
 
-	if healed, ok := model.HealMtprotoClients(inbound.Settings); ok {
-		inbound.Settings = healed
-	}
-	// Email uniqueness is enforced by updateClientTraffics + the ClientTraffic
-	// unique index below (a genuinely cross-inbound duplicate rolls the tx back).
-	// checkEmailExistForInbound is add-only — it would flag this inbound's own
-	// existing clients as duplicates on every edit.
+	// Only inbound-level config is edited here; clients live in their own table.
+	oldDomain := model.MtprotoFakeTLSDomain(oldInbound.Settings)
+	newDomain := model.MtprotoFakeTLSDomain(inbound.Settings)
+	inbound.Settings = stripMtprotoClients(inbound.Settings)
 
 	// Allocate/strip the loopback egress port to match the new routing state,
 	// carrying the existing port across edits.
@@ -615,22 +625,7 @@ func (s *InboundService) updateMtprotoInbound(inbound *model.Inbound) (*model.In
 		return inbound, false, err
 	}
 
-	db := database.GetDB()
-	tx := db.Begin()
-	defer func() {
-		if err != nil {
-			tx.Rollback()
-		} else {
-			tx.Commit()
-		}
-	}()
-
-	// Add/update/remove ClientStats rows to match the new client set.
-	if err = s.updateClientTraffics(tx, oldInbound, inbound); err != nil {
-		return inbound, false, err
-	}
-
-	// Carry over editable fields; traffic counters are owned by the mtproto job.
+	// Carry over editable fields; traffic counters live on the client rows.
 	oldInbound.Up = inbound.Up
 	oldInbound.Down = inbound.Down
 	oldInbound.Total = inbound.Total
@@ -650,12 +645,18 @@ func (s *InboundService) updateMtprotoInbound(inbound *model.Inbound) (*model.In
 		oldInbound.Tag = fmt.Sprintf("inbound-%v:%v", inbound.Listen, inbound.Port)
 	}
 
-	if err = tx.Save(oldInbound).Error; err != nil {
+	if err = database.GetDB().Save(oldInbound).Error; err != nil {
 		return inbound, false, err
 	}
-	// The proxy is reconciled out-of-band (the job restarts it when the client
-	// set changes). A Xray restart is needed only when the egress SOCKS bridge
-	// must be added, moved, or dropped — i.e. the inbound is (or was) routed.
+	// If the fronting domain changed, rebuild every client's FakeTLS secret so
+	// the per-client links track it; then reconcile the sidecar immediately.
+	svc := &MtprotoClientService{}
+	if newDomain != oldDomain {
+		svc.RehealInbound(inbound.Id, newDomain)
+	}
+	svc.Reconcile(inbound.Id)
+	// A Xray restart is needed only when the egress SOCKS bridge must be added,
+	// moved, or dropped — i.e. the inbound is (or was) routed.
 	return inbound, mtprotoRoutesThroughXray(inbound) || wasRouted, nil
 }
 
@@ -736,6 +737,10 @@ func (s *InboundService) DelInbound(id int) (bool, error) {
 	// so force a restart to drop it.
 	if inbound.Protocol == model.MTProto {
 		mtproto.GetManager().Remove(inbound.Id)
+		// Clients live in their own table — remove this inbound's rows too.
+		if err := (&MtprotoClientService{}).DeleteByInbound(inbound.Id); err != nil {
+			logger.Warning("mtproto: delete clients for inbound", inbound.Id, "failed:", err)
+		}
 		if mtprotoRoutesThroughXray(inbound) {
 			needRestart = true
 		}
@@ -1121,6 +1126,11 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	// MTProto clients live in their own table and are managed via the dedicated
+	// /panel/api/mtproto client endpoints, not the generic inbound client path.
+	if oldInbound.Protocol == model.MTProto {
+		return false, common.NewError("MTProto clients are managed via the MTProto client API")
+	}
 
 	// Secure client ID
 	for _, client := range clients {
@@ -1132,12 +1142,6 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 		case "shadowsocks", "mixed", "http":
 			// SS uses the cipher email as ID; mixed/http use the basic-auth username
 			// (stored in panel as Email) as the per-user identity.
-			if client.Email == "" {
-				return false, common.NewError("empty client ID")
-			}
-		case model.MTProto:
-			// MTProto clients are identified by email; the per-client FakeTLS
-			// secret + id are generated by the backend (HealMtprotoClients below).
 			if client.Email == "" {
 				return false, common.NewError("empty client ID")
 			}
@@ -1169,12 +1173,6 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 	}
 
 	oldInbound.Settings = string(newSettings)
-	// Generate the new MTProto client's FakeTLS secret + id.
-	if oldInbound.Protocol == model.MTProto {
-		if healed, ok := model.HealMtprotoClients(oldInbound.Settings); ok {
-			oldInbound.Settings = healed
-		}
-	}
 
 	db := database.GetDB()
 	tx := db.Begin()
@@ -1188,18 +1186,6 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 	}()
 
 	needRestart := false
-	// MTProto runs as an external sidecar reconciled out-of-band; just persist
-	// the ClientStats and let the reconcile job apply the new client. No Xray API.
-	if oldInbound.Protocol == model.MTProto {
-		for i := range clients {
-			if len(clients[i].Email) > 0 {
-				if err = s.AddClientStat(tx, data.Id, &clients[i]); err != nil {
-					return false, err
-				}
-			}
-		}
-		return false, tx.Save(oldInbound).Error
-	}
 	s.xrayApi.Init(p.GetAPIPort())
 	for _, client := range clients {
 		if len(client.Email) > 0 {
@@ -1442,6 +1428,10 @@ func (s *InboundService) DelInboundClient(inboundId int, clientId string) (bool,
 		logger.Error("Load Old Data Error")
 		return false, err
 	}
+	// MTProto clients live in their own table — managed via the MTProto API.
+	if oldInbound.Protocol == model.MTProto {
+		return false, common.NewError("MTProto clients are managed via the MTProto client API")
+	}
 	var settings map[string]any
 	err = json.Unmarshal([]byte(oldInbound.Settings), &settings)
 	if err != nil {
@@ -1514,10 +1504,7 @@ func (s *InboundService) DelInboundClient(inboundId int, clientId string) (bool,
 		}
 		if needApiDel && notDepleted {
 			// mixed/http need a config rebuild — xray API has no RemoveUser handler for them.
-			if oldInbound.Protocol == model.MTProto {
-				// MTProto is an external sidecar; the reconcile job drops the
-				// removed client's secret out-of-band. No Xray API, no restart.
-			} else if oldInbound.Protocol == "mixed" || oldInbound.Protocol == "http" {
+			if oldInbound.Protocol == "mixed" || oldInbound.Protocol == "http" {
 				needRestart = true
 			} else {
 				s.xrayApi.Init(p.GetAPIPort())
@@ -1558,6 +1545,10 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 	oldInbound, err := s.GetInbound(data.Id)
 	if err != nil {
 		return false, err
+	}
+	// MTProto clients live in their own table — managed via the MTProto API.
+	if oldInbound.Protocol == model.MTProto {
+		return false, common.NewError("MTProto clients are managed via the MTProto client API")
 	}
 
 	oldClients, err := s.GetClients(oldInbound)
@@ -1641,12 +1632,6 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 	}
 
 	oldInbound.Settings = string(newSettings)
-	// Re-heal MTProto client secrets (covers a domain/secret edit + a new id).
-	if oldInbound.Protocol == model.MTProto {
-		if healed, ok := model.HealMtprotoClients(oldInbound.Settings); ok {
-			oldInbound.Settings = healed
-		}
-	}
 	db := database.GetDB()
 	tx := db.Begin()
 
@@ -1685,9 +1670,7 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 	if len(oldEmail) > 0 {
 		// mixed/http have no AddUser/RemoveUser API handlers in xray-core, so any
 		// edit to a client requires a config rebuild.
-		if oldInbound.Protocol == model.MTProto {
-			// MTProto is reconciled out-of-band by the job; no Xray API/restart.
-		} else if oldInbound.Protocol == "mixed" || oldInbound.Protocol == "http" {
+		if oldInbound.Protocol == "mixed" || oldInbound.Protocol == "http" {
 			needRestart = true
 		} else {
 			s.xrayApi.Init(p.GetAPIPort())

@@ -16,6 +16,7 @@ type APIController struct {
 	serverController  *ServerController
 	awgController     *AwgController
 	wgController      *WgController
+	mtprotoController *MtprotoController
 	Tgbot             service.Tgbot
 }
 
@@ -57,6 +58,10 @@ func (a *APIController) initRouter(g *gin.RouterGroup, customGeo *service.Custom
 	// WireGuard Native API
 	wgGroup := api.Group("/wg")
 	a.wgController = NewWgController(wgGroup)
+
+	// MTProto API
+	mtprotoGroup := api.Group("/mtproto")
+	a.mtprotoController = NewMtprotoController(mtprotoGroup)
 
 	// Custom Geo API
 	NewCustomGeoController(api.Group("/custom-geo"), customGeo)

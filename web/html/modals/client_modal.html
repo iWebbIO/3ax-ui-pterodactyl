@@ -89,7 +89,8 @@
         isUuidClientProtocol(protocol) {
             return (
                 protocol === Protocols.AMNEZIAWG ||
-                protocol === Protocols.NATIVEWG
+                protocol === Protocols.NATIVEWG ||
+                protocol === Protocols.MTPROTO
             );
         },
         getClientStatsKey(protocol, client) {
@@ -126,6 +127,7 @@
                     return client.email;
                 case Protocols.AMNEZIAWG:
                 case Protocols.NATIVEWG:
+                case Protocols.MTPROTO:
                     return client.id || "";
                 case Protocols.HYSTERIA:
                     return client.auth;
@@ -156,6 +158,10 @@
                     );
                 case Protocols.NATIVEWG:
                     return clients.push(new Inbound.NativewgSettings.WgPeer());
+                case Protocols.MTPROTO:
+                    return clients.push(
+                        new Inbound.MtprotoSettings.MtprotoClient(),
+                    );
                 case Protocols.MIXED:
                     return clients.push(
                         new Inbound.MixedSettings.MixedClient(),
@@ -279,9 +285,12 @@
                         const isWg =
                             dbInbound &&
                             dbInbound.protocol === Protocols.NATIVEWG;
+                        const isMtproto =
+                            dbInbound &&
+                            dbInbound.protocol === Protocols.MTPROTO;
                         const url =
-                            isAwg || isWg
-                                ? `/panel/api/${isAwg ? "awg" : "wg"}/client/resetTrafficByUuid/${encodeURIComponent(client.id || "")}`
+                            isAwg || isWg || isMtproto
+                                ? `/panel/api/${isAwg ? "awg" : isWg ? "wg" : "mtproto"}/client/resetTrafficByUuid/${encodeURIComponent(client.id || "")}`
                                 : "/panel/api/inbounds/" +
                                   dbInbound.id +
                                   "/resetClientTraffic/" +

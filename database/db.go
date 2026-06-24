@@ -47,6 +47,7 @@ func initModels() error {
 		&model.AwgClient{},
 		&model.WgServer{},
 		&model.WgClient{},
+		&model.MtprotoClient{},
 		&model.CustomGeoResource{},
 	}
 	for _, model := range models {
@@ -201,9 +202,10 @@ func InitDB(dbPath string) error {
 	// an upgrade preserves the installed DNS instead of reverting to defaults.
 	migrateAwgWgDnsSplit()
 
-	// Convert legacy single-secret MTProto inbounds to the unified multi-user
-	// clients[] shape (existing secret becomes client #1; its link keeps working).
-	migrateMtprotoToClients()
+	// Move MTProto clients out of inbound.settings (legacy single-secret and the
+	// interim settings.clients[] shape) into the dedicated mtproto_clients table
+	// (unique Uuid, non-unique Email), carrying any recorded traffic across.
+	migrateMtprotoClientsTable()
 
 	isUsersEmpty, err := isTableEmpty("users")
 	if err != nil {
@@ -395,91 +397,129 @@ func migrateMixedHttpAccounts() {
 	}
 }
 
-// migrateMtprotoToClients converts legacy single-secret MTProto inbounds
-// (settings.secret + fakeTlsDomain) into the unified multi-user shape
-// (settings.clients[] with one client carrying the existing secret). The
-// existing user's t.me link (same port + same secret) keeps working, and a
-// client_traffics row is created so it appears in the per-client UI. Idempotent:
-// inbounds already carrying a clients[] array are skipped.
-func migrateMtprotoToClients() {
+// migrateMtprotoClientsTable moves MTProto clients out of inbound.settings and
+// into the dedicated mtproto_clients table. It handles both shapes seen in the
+// wild: the legacy single-secret inbound (settings.secret + fakeTlsDomain) and
+// the interim multi-user inbound (settings.clients[]). Each client becomes a row
+// with a fresh unique Uuid and a free-form (now NON-unique) Email; any traffic
+// recorded against the old per-email client_traffics row is carried over, and
+// those rows are then dropped (traffic now lives in mtproto_clients). Idempotent:
+// an inbound that already has rows in mtproto_clients is skipped, and an inbound
+// with no clients to move is left untouched. Scoped strictly to mtproto inbounds.
+func migrateMtprotoClientsTable() {
+	if !tableExists("mtproto_clients") {
+		return
+	}
 	var inbounds []model.Inbound
 	if err := db.Where("protocol = ?", model.MTProto).Find(&inbounds).Error; err != nil {
-		log.Printf("migrateMtprotoToClients: scan inbounds failed: %v", err)
+		log.Printf("migrateMtprotoClientsTable: scan inbounds failed: %v", err)
 		return
 	}
 	for i := range inbounds {
-		inbound := &inbounds[i]
-		var settings map[string]any
-		if err := json.Unmarshal([]byte(inbound.Settings), &settings); err != nil {
-			log.Printf("migrateMtprotoToClients: inbound %d settings unmarshal failed: %v", inbound.Id, err)
-			continue
-		}
-		if _, has := settings["clients"]; has {
+		ib := &inbounds[i]
+		var existing int64
+		db.Model(&model.MtprotoClient{}).Where("inbound_id = ?", ib.Id).Count(&existing)
+		if existing > 0 {
 			continue // already migrated
 		}
-		secret, _ := settings["secret"].(string)
-		if strings.TrimSpace(secret) == "" {
-			continue // nothing to carry over
-		}
 
-		email := strings.TrimSpace(inbound.Remark)
-		if email == "" {
-			email = fmt.Sprintf("mtproto-%d", inbound.Port)
+		// Tolerant parse: the interim settings were written verbatim from the
+		// browser, where some numeric fields (notably tgId) are stored as strings.
+		domain, legacySecret, parsedSeeds := model.ParseMtprotoSettingsClients(ib.Settings)
+
+		type seed struct {
+			email      string
+			secret     string
+			enable     bool
+			limitIp    int
+			totalGB    int64
+			expiryTime int64
+			tgId       int64
+			subId      string
+			comment    string
+			reset      int
 		}
-		email = uniqueClientEmail(email)
+		var seeds []seed
+		if len(parsedSeeds) > 0 {
+			for _, c := range parsedSeeds {
+				if strings.TrimSpace(c.Secret) == "" && strings.TrimSpace(c.Email) == "" {
+					continue
+				}
+				seeds = append(seeds, seed{
+					email: c.Email, secret: c.Secret, enable: c.Enable, limitIp: c.LimitIp,
+					totalGB: c.TotalGB, expiryTime: c.ExpiryTime, tgId: c.TgId,
+					subId: c.SubId, comment: c.Comment, reset: c.Reset,
+				})
+			}
+		} else if legacySecret != "" {
+			email := strings.TrimSpace(ib.Remark)
+			if email == "" {
+				email = fmt.Sprintf("mtproto-%d", ib.Port)
+			}
+			seeds = append(seeds, seed{email: email, secret: legacySecret, enable: true})
+		}
+		if len(seeds) == 0 {
+			if strings.TrimSpace(ib.Settings) != "" && domain == "" && legacySecret == "" {
+				log.Printf("migrateMtprotoClientsTable: inbound %d has no parseable clients/secret — skipped (settings may be malformed)", ib.Id)
+			}
+			continue // nothing to migrate
+		}
 
 		nowMs := time.Now().UnixMilli()
-		client := map[string]any{
-			"id":         model.GenerateMtprotoClientID(),
-			"secret":     secret,
-			"email":      email,
-			"enable":     true,
-			"limitIp":    0,
-			"totalGB":    0,
-			"expiryTime": 0,
-			"tgId":       0,
-			"subId":      "",
-			"comment":    "",
-			"reset":      0,
-			"created_at": nowMs,
-			"updated_at": nowMs,
-		}
-		settings["clients"] = []any{client}
-		delete(settings, "secret")
-
-		newSettings, err := json.MarshalIndent(settings, "", "  ")
-		if err != nil {
-			log.Printf("migrateMtprotoToClients: inbound %d marshal failed: %v", inbound.Id, err)
-			continue
-		}
-		if err := db.Model(inbound).Update("settings", string(newSettings)).Error; err != nil {
-			log.Printf("migrateMtprotoToClients: inbound %d save failed: %v", inbound.Id, err)
-			continue
-		}
-		var cnt int64
-		db.Model(&xray.ClientTraffic{}).Where("email = ?", email).Count(&cnt)
-		if cnt == 0 {
-			if err := db.Create(&xray.ClientTraffic{InboundId: inbound.Id, Email: email, Enable: true}).Error; err != nil {
-				log.Printf("migrateMtprotoToClients: inbound %d client_traffics create failed: %v", inbound.Id, err)
+		// Carry each old per-email client_traffics row's totals onto the first row
+		// with that email only, so a (post-refactor) same-email pair can't double it.
+		carried := make(map[string]bool)
+		for _, sd := range seeds {
+			row := model.MtprotoClient{
+				InboundId:  ib.Id,
+				Uuid:       uuid.New().String(),
+				Email:      sd.email,
+				Enable:     sd.enable,
+				Secret:     model.HealMtprotoClientSecret(sd.secret, domain),
+				Comment:    sd.comment,
+				SubId:      sd.subId,
+				TotalGB:    sd.totalGB,
+				ExpiryTime: sd.expiryTime,
+				Reset:      sd.reset,
+				LimitIp:    sd.limitIp,
+				TgId:       sd.tgId,
+				CreatedAt:  nowMs,
+				UpdatedAt:  nowMs,
+			}
+			// Carry over traffic recorded against the old per-email client_traffics
+			// row, once per email (legacy emails were unique, but be defensive).
+			if sd.email != "" && !carried[sd.email] {
+				var ct xray.ClientTraffic
+				if err := db.Where("email = ?", sd.email).First(&ct).Error; err == nil {
+					row.Upload, row.Download, row.AllTime = ct.Up, ct.Down, ct.AllTime
+					if row.AllTime == 0 {
+						row.AllTime = ct.Up + ct.Down
+					}
+					row.LastOnline = ct.LastOnline
+					carried[sd.email] = true
+				}
+			}
+			if err := db.Create(&row).Error; err != nil {
+				log.Printf("migrateMtprotoClientsTable: inbound %d create client %q failed: %v", ib.Id, sd.email, err)
 			}
 		}
-		log.Printf("migrateMtprotoToClients: converted inbound %d to 1-client multi-user shape (email %q)", inbound.Id, email)
-	}
-}
 
-// uniqueClientEmail returns base, or base-2, base-3, ... if a client_traffics row
-// with that email already exists (emails are globally unique).
-func uniqueClientEmail(base string) string {
-	email := base
-	for n := 2; n < 1000; n++ {
-		var cnt int64
-		db.Model(&xray.ClientTraffic{}).Where("email = ?", email).Count(&cnt)
-		if cnt == 0 {
-			return email
+		// Strip the moved client list / legacy secret from settings (inbound-level
+		// config such as fakeTlsDomain / routeThroughXray is preserved).
+		var settings map[string]any
+		if err := json.Unmarshal([]byte(ib.Settings), &settings); err == nil {
+			delete(settings, "clients")
+			delete(settings, "secret")
+			if out, err := json.MarshalIndent(settings, "", "  "); err == nil {
+				db.Model(ib).Update("settings", string(out))
+			}
 		}
-		email = fmt.Sprintf("%s-%d", base, n)
+		// Drop the per-client client_traffics rows owned by this mtproto inbound.
+		if err := db.Where("inbound_id = ?", ib.Id).Delete(&xray.ClientTraffic{}).Error; err != nil {
+			log.Printf("migrateMtprotoClientsTable: inbound %d client_traffics cleanup failed: %v", ib.Id, err)
+		}
+		log.Printf("migrateMtprotoClientsTable: moved %d client(s) for inbound %d into mtproto_clients", len(seeds), ib.Id)
 	}
-	return email
 }
 
 // CloseDB closes the database connection if it exists.

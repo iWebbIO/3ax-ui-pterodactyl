@@ -97,14 +97,18 @@ func (inst Instance) activeClients() []ClientSecret {
 	return inst.Clients[:1]
 }
 
-// Traffic is a traffic delta since the previous scrape. For a multi-user proxy
-// it is per-client (Email set to the client's); for a single-secret proxy it is
-// the per-inbound delta attributed to the sole client's Email.
+// Traffic is a traffic delta since the previous scrape, attributed to a single
+// client. Uuid is the client's stable id (the mtg-multi [secrets]/stats key and
+// the mtproto_clients.uuid the panel keys traffic by); Email is the human label.
+// LastSeen is the scrape time when the client had at least one live connection
+// at scrape time (0 otherwise), used to drive per-client online status.
 type Traffic struct {
-	Tag   string
-	Email string
-	Up    int64
-	Down  int64
+	Tag      string
+	Uuid     string
+	Email    string
+	Up       int64
+	Down     int64
+	LastSeen int64
 }
 
 type managed struct {
@@ -149,18 +153,16 @@ func GetManager() *Manager {
 	return manager
 }
 
-// InstanceFromInbound derives a desired Instance from an mtproto inbound: it
-// heals each client's FakeTLS secret, then keeps only the clients the backend
-// should currently serve (enabled and not past their expiry). Returns false when
-// the inbound is not a usable mtproto inbound or has no active clients.
-func InstanceFromInbound(ib *model.Inbound) (Instance, bool) {
+// InstanceFromInbound derives a desired Instance from an mtproto inbound and its
+// client rows (read from the mtproto_clients table by the caller — the mtproto
+// package stays DB-free). It keeps only the clients the backend should currently
+// serve (enabled and not past their expiry). Returns false when the inbound is
+// not a usable mtproto inbound or has no active clients.
+func InstanceFromInbound(ib *model.Inbound, clients []model.MtprotoClient) (Instance, bool) {
 	if ib == nil || ib.Protocol != model.MTProto {
 		return Instance{}, false
 	}
 	settings := ib.Settings
-	if healed, ok := model.HealMtprotoClients(settings); ok {
-		settings = healed
-	}
 	var parsed struct {
 		Debug                 bool   `json:"debug"`
 		ProxyProtocolListener bool   `json:"proxyProtocolListener"`
@@ -177,7 +179,6 @@ func InstanceFromInbound(ib *model.Inbound) (Instance, bool) {
 		return Instance{}, false
 	}
 
-	_, clients := model.ParseMtprotoClients(settings)
 	nowMs := time.Now().UnixMilli()
 	active := make([]ClientSecret, 0, len(clients))
 	for _, c := range clients {
@@ -187,10 +188,10 @@ func InstanceFromInbound(ib *model.Inbound) (Instance, bool) {
 		if c.ExpiryTime > 0 && c.ExpiryTime <= nowMs {
 			continue
 		}
-		if strings.TrimSpace(c.Id) == "" || strings.TrimSpace(c.Secret) == "" {
+		if strings.TrimSpace(c.Uuid) == "" || strings.TrimSpace(c.Secret) == "" {
 			continue
 		}
-		active = append(active, ClientSecret{Id: c.Id, Secret: c.Secret, Email: c.Email})
+		active = append(active, ClientSecret{Id: c.Uuid, Secret: c.Secret, Email: c.Email})
 	}
 	if len(active) == 0 {
 		return Instance{}, false
@@ -375,26 +376,32 @@ func (m *Manager) CollectTraffic() []Traffic {
 			if !ok {
 				continue
 			}
+			nowMs := time.Now().UnixMilli()
 			newByClient := make(map[string]clientCounter, len(s.clients))
 			for _, c := range s.clients {
 				u, exists := users[c.Id]
 				if !exists {
 					continue
 				}
-				newByClient[c.Id] = u
-				prev, had := s.lastByClient[c.Id]
-				if had && c.Email != "" {
-					du := u.up - prev.up
-					dd := u.down - prev.down
+				newByClient[c.Id] = clientCounter{up: u.up, down: u.down}
+				var du, dd int64
+				if prev, had := s.lastByClient[c.Id]; had {
+					du = u.up - prev.up
+					dd = u.down - prev.down
 					if du < 0 {
 						du = 0
 					}
 					if dd < 0 {
 						dd = 0
 					}
-					if du > 0 || dd > 0 {
-						out = append(out, Traffic{Tag: s.tag, Email: c.Email, Up: du, Down: dd})
-					}
+				}
+				// A live connection at scrape time marks the client online now.
+				var lastSeen int64
+				if u.connections > 0 {
+					lastSeen = nowMs
+				}
+				if du > 0 || dd > 0 || lastSeen > 0 {
+					out = append(out, Traffic{Tag: s.tag, Uuid: c.Id, Email: c.Email, Up: du, Down: dd, LastSeen: lastSeen})
 				}
 			}
 			m.mu.Lock()
@@ -430,16 +437,25 @@ func (m *Manager) CollectTraffic() []Traffic {
 		m.mu.Unlock()
 
 		if s.haveLast && (du > 0 || dd > 0) && len(s.clients) > 0 {
-			out = append(out, Traffic{Tag: s.tag, Email: s.clients[0].Email, Up: du, Down: dd})
+			out = append(out, Traffic{Tag: s.tag, Uuid: s.clients[0].Id, Email: s.clients[0].Email, Up: du, Down: dd})
 		}
 	}
 	return out
 }
 
+// userStat is one mtg-multi /stats user entry: cumulative byte counters plus the
+// number of live connections at scrape time (used for online status).
+type userStat struct {
+	up          int64
+	down        int64
+	connections int64
+}
+
 // scrapeStats reads mtg-multi's /stats JSON and returns each user's cumulative
-// byte counters keyed by the [secrets] entry name (= client Id). bytes_in is the
-// client's upload (toward Telegram), bytes_out its download.
-func scrapeStats(port int) (map[string]clientCounter, bool) {
+// byte counters + live connection count, keyed by the [secrets] entry name
+// (= client Uuid). bytes_in is the client's upload (toward Telegram), bytes_out
+// its download.
+func scrapeStats(port int) (map[string]userStat, bool) {
 	client := http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/stats", port))
 	if err != nil {
@@ -448,16 +464,17 @@ func scrapeStats(port int) (map[string]clientCounter, bool) {
 	defer resp.Body.Close()
 	var parsed struct {
 		Users map[string]struct {
-			BytesIn  int64 `json:"bytes_in"`
-			BytesOut int64 `json:"bytes_out"`
+			Connections int64 `json:"connections"`
+			BytesIn     int64 `json:"bytes_in"`
+			BytesOut    int64 `json:"bytes_out"`
 		} `json:"users"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return nil, false
 	}
-	out := make(map[string]clientCounter, len(parsed.Users))
+	out := make(map[string]userStat, len(parsed.Users))
 	for name, u := range parsed.Users {
-		out[name] = clientCounter{up: u.BytesIn, down: u.BytesOut}
+		out[name] = userStat{up: u.BytesIn, down: u.BytesOut, connections: u.Connections}
 	}
 	return out, true
 }
@@ -503,9 +520,11 @@ func renderConfig(inst Instance, statsPort int) string {
 		fmt.Fprintf(&b, "prefer-ip = %q\n", inst.PreferIP)
 	}
 	if inst.MultiUser {
+		// The secret name is the client Uuid; quote it so a UUID's dashes are a
+		// valid TOML key. mtg-multi reports /stats users under this exact name.
 		b.WriteString("\n[secrets]\n")
 		for _, c := range clients {
-			fmt.Fprintf(&b, "%s = %q\n", c.Id, c.Secret)
+			fmt.Fprintf(&b, "%q = %q\n", c.Id, c.Secret)
 		}
 	}
 	if inst.FrontingIP != "" || inst.FrontingPort > 0 || inst.FrontingProxyProtocol {

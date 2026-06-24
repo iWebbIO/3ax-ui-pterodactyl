@@ -5,8 +5,49 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
+
+// MtprotoClient is one user of an MTProto (mtg / mtg-multi) proxy, stored in its
+// own dedicated table — exactly like AwgClient / WgClient. Decoupling the client
+// list from the inbound's settings JSON gives MTProto a unique-UID identity
+// (Uuid) and a free-form, NON-unique Email label, so several clients of the same
+// inbound may share a name.
+//
+// Uuid is the stable identity: it is the mtg-multi [secrets] entry name (quoted
+// in the generated TOML), the key under which mtg-multi's /stats reports the
+// user's traffic, and the value used in the panel's /panel/api/mtproto routes.
+type MtprotoClient struct {
+	Id        int    `json:"id" gorm:"primaryKey;autoIncrement"`
+	InboundId int    `json:"inboundId" gorm:"index"`
+	Uuid      string `json:"uuid" gorm:"index"` // unique UID (enforced in the service)
+	Email     string `json:"email"`             // free-form label — NOT unique
+	// No gorm default: a default:true tag would make Create() silently drop an
+	// explicit Enable=false (its zero value), so a disabled client (e.g. one
+	// migrated in disabled) would be written back as enabled. Callers always set
+	// Enable; the UI's client form defaults it to true for new clients.
+	Enable  bool   `json:"enable"`
+	Secret  string `json:"secret"` // FakeTLS hex secret ("ee"+middle+hex(domain))
+	Comment string `json:"comment"`
+	SubId   string `json:"subId"`
+
+	// Traffic stats. Upload/Download are the resettable counters compared against
+	// TotalGB; AllTime is the lifetime total preserved across a traffic reset.
+	Upload   int64 `json:"upload" gorm:"default:0"`
+	Download int64 `json:"download" gorm:"default:0"`
+	AllTime  int64 `json:"allTime" gorm:"default:0"`
+	TotalGB  int64 `json:"totalGB" gorm:"default:0"` // limit in bytes (0 = unlimited)
+
+	ExpiryTime int64 `json:"expiryTime" gorm:"default:0"` // 0 = never
+	Reset      int   `json:"reset" gorm:"default:0"`      // auto-renew interval in days
+	LimitIp    int   `json:"limitIp" gorm:"default:0"`
+	TgId       int64 `json:"tgId" gorm:"default:0"`
+	LastOnline int64 `json:"lastOnline" gorm:"default:0"` // last_seen from /stats (ms)
+
+	CreatedAt int64 `json:"createdAt" gorm:"autoCreateTime:milli"`
+	UpdatedAt int64 `json:"updatedAt" gorm:"autoUpdateTime:milli"`
+}
 
 // GenerateFakeTLSSecret builds an MTProto FakeTLS secret for the given domain:
 // the "ee" FakeTLS marker, 16 random bytes, then the domain encoded as hex.
@@ -40,60 +81,16 @@ func mtprotoSecretMiddle(secret string) string {
 	return mtprotoRandomMiddle()
 }
 
-// HealMtprotoSecret normalises an mtproto inbound's settings JSON before the
-// value leaves for the mtg sidecar or a share link: it rebuilds `secret` so it
-// is always a valid FakeTLS secret whose trailing domain matches
-// `fakeTlsDomain`, generating the random middle when one is missing and
-// rewriting the domain suffix when the domain changed. Returns the rewritten
-// settings and true when anything changed.
-func HealMtprotoSecret(settings string) (string, bool) {
-	if settings == "" {
-		return settings, false
-	}
-	var parsed map[string]any
-	if err := json.Unmarshal([]byte(settings), &parsed); err != nil {
-		return settings, false
-	}
-	domain, _ := parsed["fakeTlsDomain"].(string)
+// HealMtprotoClientSecret rebuilds a client's FakeTLS secret so its trailing
+// domain matches `domain`, reusing the random middle when the existing secret is
+// well-formed (so an unchanged client keeps a stable link). An empty domain
+// leaves the secret untouched.
+func HealMtprotoClientSecret(secret, domain string) string {
 	domain = strings.TrimSpace(domain)
 	if domain == "" {
-		return settings, false
+		return secret
 	}
-	secret, _ := parsed["secret"].(string)
-	expected := "ee" + mtprotoSecretMiddle(secret) + hex.EncodeToString([]byte(domain))
-	if secret == expected {
-		return settings, false
-	}
-	parsed["secret"] = expected
-	out, err := json.MarshalIndent(parsed, "", "  ")
-	if err != nil {
-		return settings, false
-	}
-	return string(out), true
-}
-
-// MtprotoClient is one user of a multi-user MTProto proxy. Its Id is the stable
-// key used both as the mtg-multi `[secrets]` entry name and the key under which
-// per-user traffic is reported by mtg-multi's /stats endpoint. Email is the
-// human label and the key for the panel's ClientStats traffic rows.
-type MtprotoClient struct {
-	Id         string `json:"id"`
-	Secret     string `json:"secret"`
-	Email      string `json:"email"`
-	Enable     bool   `json:"enable"`
-	ExpiryTime int64  `json:"expiryTime"`
-	TotalGB    int64  `json:"totalGB"`
-	LimitIp    int    `json:"limitIp"`
-}
-
-// GenerateMtprotoClientID returns a fresh client id: 8 random bytes as hex, safe
-// to use as a TOML bare key in mtg-multi's [secrets] table.
-func GenerateMtprotoClientID() string {
-	buf := make([]byte, 8)
-	if _, err := rand.Read(buf); err != nil {
-		panic(fmt.Errorf("mtproto: crypto/rand read failed: %w", err))
-	}
-	return hex.EncodeToString(buf)
+	return "ee" + mtprotoSecretMiddle(secret) + hex.EncodeToString([]byte(domain))
 }
 
 // MtprotoFakeTLSDomain extracts the inbound's fronting domain from its settings.
@@ -105,64 +102,93 @@ func MtprotoFakeTLSDomain(settings string) string {
 	return strings.TrimSpace(parsed.FakeTlsDomain)
 }
 
-// ParseMtprotoClients returns the inbound's fronting domain and its client list.
-func ParseMtprotoClients(settings string) (string, []MtprotoClient) {
-	var parsed struct {
-		FakeTlsDomain string          `json:"fakeTlsDomain"`
-		Clients       []MtprotoClient `json:"clients"`
-	}
-	if err := json.Unmarshal([]byte(settings), &parsed); err != nil {
-		return "", nil
-	}
-	return strings.TrimSpace(parsed.FakeTlsDomain), parsed.Clients
+// MtprotoClientSeed is a client parsed out of an inbound's settings.clients[]
+// (the inbound create form, or the interim settings storage being migrated). The
+// numeric fields are read tolerantly because the panel's JS stores some of them
+// as strings — notably tgId defaults to "" — and the interim settings were
+// persisted verbatim from the browser, so a strict int64 decode would fail.
+type MtprotoClientSeed struct {
+	Email      string
+	Secret     string
+	Enable     bool
+	HasEnable  bool // whether the "enable" key was present (else default true)
+	LimitIp    int
+	TotalGB    int64
+	ExpiryTime int64
+	TgId       int64
+	SubId      string
+	Comment    string
+	Reset      int
 }
 
-// HealMtprotoClients normalises a multi-user mtproto inbound's settings: it gives
-// every client a stable id, and rebuilds each client's FakeTLS secret so its
-// trailing domain matches `fakeTlsDomain` (reusing the random middle so an
-// unchanged client keeps its link). Returns the rewritten settings and true when
-// anything changed. A legacy single-secret inbound (top-level `secret`, no
-// `clients`) is left untouched here — db migration converts it first.
-func HealMtprotoClients(settings string) (string, bool) {
-	if settings == "" {
-		return settings, false
+// ParseMtprotoSettingsClients reads an mtproto inbound's settings tolerantly,
+// returning the fronting domain, the legacy top-level single-secret (empty for
+// the multi-user shape), and the client seeds from settings.clients[].
+func ParseMtprotoSettingsClients(settings string) (domain, legacySecret string, seeds []MtprotoClientSeed) {
+	var raw struct {
+		FakeTlsDomain string           `json:"fakeTlsDomain"`
+		Secret        string           `json:"secret"`
+		Clients       []map[string]any `json:"clients"`
 	}
-	var parsed map[string]any
-	if err := json.Unmarshal([]byte(settings), &parsed); err != nil {
-		return settings, false
+	if err := json.Unmarshal([]byte(settings), &raw); err != nil {
+		return "", "", nil
 	}
-	domain, _ := parsed["fakeTlsDomain"].(string)
-	domain = strings.TrimSpace(domain)
-	clients, ok := parsed["clients"].([]any)
-	if !ok || domain == "" {
-		return settings, false
+	domain = strings.TrimSpace(raw.FakeTlsDomain)
+	legacySecret = strings.TrimSpace(raw.Secret)
+	for _, c := range raw.Clients {
+		_, hasEnable := c["enable"]
+		seeds = append(seeds, MtprotoClientSeed{
+			Email:      jsonAsString(c["email"]),
+			Secret:     jsonAsString(c["secret"]),
+			Enable:     jsonAsBool(c["enable"]),
+			HasEnable:  hasEnable,
+			LimitIp:    int(jsonAsInt64(c["limitIp"])),
+			TotalGB:    jsonAsInt64(c["totalGB"]),
+			ExpiryTime: jsonAsInt64(c["expiryTime"]),
+			TgId:       jsonAsInt64(c["tgId"]),
+			SubId:      jsonAsString(c["subId"]),
+			Comment:    jsonAsString(c["comment"]),
+			Reset:      int(jsonAsInt64(c["reset"])),
+		})
 	}
-	changed := false
-	domainHex := hex.EncodeToString([]byte(domain))
-	for i, c := range clients {
-		cm, ok := c.(map[string]any)
-		if !ok {
-			continue
+	return domain, legacySecret, seeds
+}
+
+// jsonAsString returns v as a string when it is one, else "".
+func jsonAsString(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+// jsonAsBool returns v as a bool when it is one, else false.
+func jsonAsBool(v any) bool {
+	b, _ := v.(bool)
+	return b
+}
+
+// jsonAsInt64 coerces a JSON value (number, numeric string, "" or null) to int64.
+func jsonAsInt64(v any) int64 {
+	switch t := v.(type) {
+	case float64:
+		return int64(t)
+	case int64:
+		return t
+	case int:
+		return int64(t)
+	case json.Number:
+		i, _ := t.Int64()
+		return i
+	case string:
+		s := strings.TrimSpace(t)
+		if s == "" {
+			return 0
 		}
-		if id, _ := cm["id"].(string); strings.TrimSpace(id) == "" {
-			cm["id"] = GenerateMtprotoClientID()
-			changed = true
+		if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+			return i
 		}
-		secret, _ := cm["secret"].(string)
-		expected := "ee" + mtprotoSecretMiddle(secret) + domainHex
-		if secret != expected {
-			cm["secret"] = expected
-			changed = true
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			return int64(f)
 		}
-		clients[i] = cm
 	}
-	if !changed {
-		return settings, false
-	}
-	parsed["clients"] = clients
-	out, err := json.MarshalIndent(parsed, "", "  ")
-	if err != nil {
-		return settings, false
-	}
-	return string(out), true
+	return 0
 }

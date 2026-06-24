@@ -182,11 +182,11 @@ func GetAwgVersion() string {
 	if mod := awgModuleVersion(); mod != "" {
 		switch date := awgVersionDate(mod); {
 		case date >= awg20ReleaseDate:
-			return fmt.Sprintf("2.0.%d", date)
+			return fmt.Sprintf("v2.0.%d", date)
 		case date > 0:
-			return fmt.Sprintf("1.x.%d", date)
+			return fmt.Sprintf("v1.x.%d", date)
 		default:
-			return mod
+			return withVPrefix(mod)
 		}
 	}
 	// Fallback: the (cosmetic) tools version string — only when the module
@@ -195,7 +195,16 @@ func GetAwgVersion() string {
 	if err != nil {
 		return "unknown"
 	}
-	return strings.TrimSpace(string(output))
+	return withVPrefix(strings.TrimSpace(string(output)))
+}
+
+// withVPrefix prefixes a version string with "v" for display, unless it already
+// has one or is empty.
+func withVPrefix(v string) string {
+	if v == "" || strings.HasPrefix(v, "v") || strings.HasPrefix(v, "V") {
+		return v
+	}
+	return "v" + v
 }
 
 // awgModuleVersion returns the AmneziaWG kernel module version (e.g. "1.0.20251009"),
