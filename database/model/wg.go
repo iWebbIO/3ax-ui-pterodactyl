@@ -89,11 +89,19 @@ type WgClient struct {
 
 	PersistentKeepalive int `json:"persistentKeepalive" gorm:"default:25"`
 
-	// Traffic stats
+	// Traffic stats. Upload/Download accumulate as lifetime totals (resettable via
+	// reset-traffic) and AllTime is the absolute lifetime — same model as VLESS.
 	Upload   int64 `json:"upload" gorm:"default:0"`
 	Download int64 `json:"download" gorm:"default:0"`
 	TotalGB  int64 `json:"totalGB" gorm:"default:0"` // traffic limit in bytes (0 = unlimited)
 	AllTime  int64 `json:"allTime" gorm:"default:0"`
+
+	// Raw kernel per-peer transfer counters seen at the last poll. They are the
+	// baseline for computing lifetime deltas, so Upload/Download survive an
+	// interface bounce (the kernel resets per-peer counters to zero on bounce).
+	// Internal bookkeeping — not exposed via JSON.
+	LastPeerUp   int64 `json:"-" gorm:"default:0"`
+	LastPeerDown int64 `json:"-" gorm:"default:0"`
 
 	ExpiryTime int64 `json:"expiryTime" gorm:"default:0"` // 0 = never
 	Reset      int   `json:"reset" gorm:"default:0"`      // auto-renew interval in days, 0 = disabled

@@ -722,25 +722,30 @@ func (s *AwgService) UpdateTrafficStats() {
 				continue
 			}
 
-			// Calculate delta (peer stats are cumulative since interface up)
-			newUp := peer.TransferTx // from server perspective: TX to peer = client's upload perspective is reversed
+			// Peer stats are cumulative since the interface came up and reset to
+			// zero on a bounce. Accumulate the delta against the last seen raw
+			// value so Upload/Download are lifetime totals that survive a bounce
+			// (a drop below the baseline means the counter reset → the new value
+			// is itself the delta).
+			newUp := peer.TransferTx
 			newDown := peer.TransferRx
 
 			updates := map[string]any{}
 
-			// Update traffic if changed
-			if newUp != client.Upload || newDown != client.Download {
-				allTimeDelta := int64(0)
-				if newUp > client.Upload {
-					allTimeDelta += newUp - client.Upload
+			if newUp != client.LastPeerUp || newDown != client.LastPeerDown {
+				deltaUp := newUp - client.LastPeerUp
+				if deltaUp < 0 {
+					deltaUp = newUp
 				}
-				if newDown > client.Download {
-					allTimeDelta += newDown - client.Download
+				deltaDown := newDown - client.LastPeerDown
+				if deltaDown < 0 {
+					deltaDown = newDown
 				}
-
-				updates["upload"] = newUp
-				updates["download"] = newDown
-				updates["all_time"] = client.AllTime + allTimeDelta
+				updates["upload"] = client.Upload + deltaUp
+				updates["download"] = client.Download + deltaDown
+				updates["all_time"] = client.AllTime + deltaUp + deltaDown
+				updates["last_peer_up"] = newUp
+				updates["last_peer_down"] = newDown
 			}
 
 			// Update last online from handshake timestamp (seconds → milliseconds)

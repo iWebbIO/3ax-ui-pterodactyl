@@ -644,23 +644,29 @@ func (s *WgService) UpdateTrafficStats() {
 				continue
 			}
 
+			// Accumulate the delta against the last seen raw counter so Upload/
+			// Download are lifetime totals that survive an interface bounce (a drop
+			// below the baseline means the kernel counter reset → the new value is
+			// itself the delta).
 			newUp := peer.TransferTx
 			newDown := peer.TransferRx
 
 			updates := map[string]any{}
 
-			if newUp != client.Upload || newDown != client.Download {
-				allTimeDelta := int64(0)
-				if newUp > client.Upload {
-					allTimeDelta += newUp - client.Upload
+			if newUp != client.LastPeerUp || newDown != client.LastPeerDown {
+				deltaUp := newUp - client.LastPeerUp
+				if deltaUp < 0 {
+					deltaUp = newUp
 				}
-				if newDown > client.Download {
-					allTimeDelta += newDown - client.Download
+				deltaDown := newDown - client.LastPeerDown
+				if deltaDown < 0 {
+					deltaDown = newDown
 				}
-
-				updates["upload"] = newUp
-				updates["download"] = newDown
-				updates["all_time"] = client.AllTime + allTimeDelta
+				updates["upload"] = client.Upload + deltaUp
+				updates["download"] = client.Download + deltaDown
+				updates["all_time"] = client.AllTime + deltaUp + deltaDown
+				updates["last_peer_up"] = newUp
+				updates["last_peer_down"] = newDown
 			}
 
 			if peer.LatestHandshake > 0 {

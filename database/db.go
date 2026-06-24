@@ -215,7 +215,64 @@ func InitDB(dbPath string) error {
 	if err := initUser(); err != nil {
 		return err
 	}
-	return runSeeders(isUsersEmpty)
+	if err := runSeeders(isUsersEmpty); err != nil {
+		return err
+	}
+	// One-time: seed the lifetime-traffic baseline for AWG/WG clients now that
+	// upload/download accumulate (instead of holding the bounce-resettable kernel
+	// counter). Runs after runSeeders so it can't disturb its empty-table check.
+	migrateAwgWgPeerBaseline()
+	return nil
+}
+
+// migrateAwgWgPeerBaseline runs once after AWG/WG upload/download became lifetime
+// accumulators. Previously they stored the kernel's per-peer counter, which
+// resets on an interface bounce — so any traffic before a bounce survived only in
+// all_time, leaving the per-client traffic column showing 0. For each existing
+// client it (1) records the current upload/download as the raw-peer baseline so
+// the next poll computes a correct delta, and (2) folds the traffic that survived
+// only in all_time back into download so the column reflects real lifetime usage
+// immediately. Guarded by a seeder record: re-running after upload/download have
+// diverged from the raw counter would corrupt the baseline.
+func migrateAwgWgPeerBaseline() {
+	var seeders []string
+	db.Model(&model.HistoryOfSeeders{}).Pluck("seeder_name", &seeders)
+	if slices.Contains(seeders, "AwgWgPeerBaseline") {
+		return
+	}
+
+	seedTable := func(table string) {
+		if !tableExists(table) {
+			return
+		}
+		type row struct {
+			Id       int
+			Upload   int64
+			Download int64
+			AllTime  int64
+		}
+		var rows []row
+		db.Table(table).Select("id, upload, download, all_time").Scan(&rows)
+		for _, r := range rows {
+			updates := map[string]any{
+				"last_peer_up":   r.Upload,
+				"last_peer_down": r.Download,
+			}
+			// Fold the all_time-only remainder back into download (lifetime totals
+			// are combined in all_time, so the split can't be recovered exactly;
+			// download dominates for VPN clients).
+			if lost := r.AllTime - r.Upload - r.Download; lost > 0 {
+				updates["download"] = r.Download + lost
+			}
+			db.Table(table).Where("id = ?", r.Id).Updates(updates)
+		}
+	}
+	seedTable("awg_clients")
+	seedTable("wg_clients")
+
+	if err := db.Create(&model.HistoryOfSeeders{SeederName: "AwgWgPeerBaseline"}).Error; err != nil {
+		log.Printf("migrateAwgWgPeerBaseline: record seeder failed: %v", err)
+	}
 }
 
 // migrateAwgClientUUIDs populates UUIDs for existing AWG clients that have empty UUIDs.
