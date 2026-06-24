@@ -3424,7 +3424,16 @@ func (s *InboundService) MigrateDB() {
 }
 
 func (s *InboundService) GetOnlineClients() []string {
-	return p.GetOnlineClients()
+	online := p.GetOnlineClients()
+	// AWG / native WireGuard / MTProto clients track their own online state (by
+	// uuid) in dedicated tables. Merge them here so the realtime traffic
+	// broadcast and the /onlines endpoint report every protocol uniformly — the
+	// frontend keys online off this one list, so these update live instead of
+	// only on a full inbound refresh. uuids never collide with xray emails.
+	online = append(online, (&AwgService{}).GetOnlineClients()...)
+	online = append(online, (&WgService{}).GetOnlineClients()...)
+	online = append(online, (&MtprotoClientService{}).GetOnlineClients()...)
+	return online
 }
 
 func (s *InboundService) GetClientsLastOnline() (map[string]int64, error) {

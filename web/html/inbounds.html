@@ -1682,9 +1682,6 @@
             defaultKey: "",
             clientCount: [],
             onlineClients: [],
-            awgOnlineClients: [],
-            wgOnlineClients: [],
-            mtprotoOnlineClients: [],
             mtprotoVersion: "",
             lastOnlineMap: {},
             isRefreshEnabled:
@@ -1811,21 +1808,14 @@
                                 (sum, c) => sum + (c.allTime || 0),
                                 0,
                             );
-                            // Track WG online clients by UUID (not email) to ensure cross-protocol uniqueness
-                            const now = Date.now();
-                            const wgOnline = [];
+                            // Online state comes from the unified onlineClients
+                            // list (realtime via the traffic ws); here we only
+                            // keep the per-uuid "last seen" timestamps.
                             for (const c of wgMsg.obj) {
-                                if (
-                                    c.lastOnline &&
-                                    now - c.lastOnline < 180000
-                                ) {
-                                    wgOnline.push(c.uuid);
-                                }
                                 if (c.lastOnline > 0) {
                                     this.lastOnlineMap[c.uuid] = c.lastOnline;
                                 }
                             }
-                            this.wgOnlineClients = wgOnline;
                         }
                     } catch (e) {
                         console.error("Failed to fetch WG clients:", e);
@@ -1899,21 +1889,14 @@
                                 (sum, c) => sum + (c.allTime || 0),
                                 0,
                             );
-                            // Track AWG online clients by UUID (not email) to ensure cross-protocol uniqueness
-                            const now = Date.now();
-                            const awgOnline = [];
+                            // Online state comes from the unified onlineClients
+                            // list (realtime via the traffic ws); here we only
+                            // keep the per-uuid "last seen" timestamps.
                             for (const c of awgMsg.obj) {
-                                if (
-                                    c.lastOnline &&
-                                    now - c.lastOnline < 180000
-                                ) {
-                                    awgOnline.push(c.uuid);
-                                }
                                 if (c.lastOnline > 0) {
                                     this.lastOnlineMap[c.uuid] = c.lastOnline;
                                 }
                             }
-                            this.awgOnlineClients = awgOnline;
                         }
                     } catch (e) {
                         console.error("Failed to fetch AWG clients:", e);
@@ -1950,8 +1933,6 @@
                     return;
                 }
                 const all = clientsMsg.obj;
-                const now = Date.now();
-                const online = [];
                 for (const inbound of inbounds) {
                     if (inbound.protocol !== Protocols.MTPROTO) continue;
                     const rows = all.filter((c) => c.inboundId === inbound.id);
@@ -2004,16 +1985,14 @@
                         (sum, c) => sum + (c.allTime || 0),
                         0,
                     );
+                    // Online state comes from the unified onlineClients list
+                    // (realtime via the traffic ws); keep only the "last seen".
                     for (const c of rows) {
-                        if (c.lastOnline && now - c.lastOnline < 180000) {
-                            online.push(c.uuid);
-                        }
                         if (c.lastOnline > 0) {
                             this.lastOnlineMap[c.uuid] = c.lastOnline;
                         }
                     }
                 }
-                this.mtprotoOnlineClients = online;
             },
             async getOnlineUsers() {
                 const msg = await HttpUtil.post("/panel/api/inbounds/onlines");
@@ -3316,15 +3295,12 @@
                 const expired = hasExpiry && expiryTime <= now;
                 return expired || exhausted;
             },
-            isClientOnline(email, protocol) {
-                if (protocol === "amneziawg") {
-                    return this.awgOnlineClients.includes(email);
-                } else if (protocol === "nativewg") {
-                    return this.wgOnlineClients.includes(email);
-                } else if (protocol === "mtproto") {
-                    return this.mtprotoOnlineClients.includes(email);
-                }
-                return this.onlineClients.includes(email);
+            isClientOnline(clientKey, protocol) {
+                // Online for every protocol comes from the single onlineClients
+                // list (xray emails + AWG/WG/MTProto uuids), refreshed in realtime
+                // by the "traffic" websocket event — so non-xray protocols update
+                // live instead of only on a full inbound refresh.
+                return this.onlineClients.includes(clientKey);
             },
             getLastOnline(email) {
                 return this.lastOnlineMap[email] || null;
