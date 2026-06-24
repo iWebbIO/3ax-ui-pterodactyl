@@ -23,12 +23,17 @@ func NewMtprotoController(g *gin.RouterGroup) *MtprotoController {
 }
 
 func (a *MtprotoController) initRouter(g *gin.RouterGroup) {
+	g.GET("/version", a.getVersion)
 	g.GET("/clients", a.getClients)
 	g.POST("/client/add", a.addClient)
 	g.POST("/client/updateByUuid/:uuid", a.updateClientByUUID)
 	g.POST("/client/delByUuid/:uuid", a.deleteClientByUUID)
 	g.POST("/client/toggleByUuid/:uuid", a.toggleClientByUUID)
 	g.POST("/client/resetTrafficByUuid/:uuid", a.resetClientTrafficByUUID)
+}
+
+func (a *MtprotoController) getVersion(c *gin.Context) {
+	jsonObj(c, a.clientService.GetVersion(), nil)
 }
 
 func (a *MtprotoController) getClients(c *gin.Context) {

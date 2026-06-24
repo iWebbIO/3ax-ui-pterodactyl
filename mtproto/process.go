@@ -63,6 +63,42 @@ func GetBinaryPath() string {
 	return config.GetBinFolderPath() + "/" + GetBinaryName()
 }
 
+var (
+	versionOnce   sync.Once
+	cachedVersion string
+)
+
+// GetVersion returns the installed mtg / mtg-multi sidecar version (e.g.
+// "v1.11.0"), detected by running the active binary with --version and cached
+// after the first call. Returns "unknown" when no backend is installed or the
+// output can't be parsed.
+func GetVersion() string {
+	versionOnce.Do(func() {
+		cachedVersion = detectVersion()
+	})
+	return cachedVersion
+}
+
+func detectVersion() string {
+	path := GetBinaryPath()
+	if !fileExists(path) {
+		return "unknown"
+	}
+	out, err := exec.Command(path, "--version").Output()
+	if err != nil {
+		return "unknown"
+	}
+	fields := strings.Fields(strings.TrimSpace(string(out)))
+	if len(fields) == 0 {
+		return "unknown"
+	}
+	v := fields[0]
+	if !strings.HasPrefix(v, "v") && !strings.HasPrefix(v, "V") {
+		v = "v" + v
+	}
+	return v
+}
+
 func configDir() string {
 	return config.GetBinFolderPath() + "/mtproto"
 }

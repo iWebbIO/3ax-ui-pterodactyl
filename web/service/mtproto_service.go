@@ -32,6 +32,12 @@ func (s *MtprotoClientService) getInbound(inboundId int) (*model.Inbound, error)
 	return &ib, nil
 }
 
+// GetVersion returns the installed mtg / mtg-multi sidecar version (e.g.
+// "v1.11.0"), shown next to the protocol in the inbound details.
+func (s *MtprotoClientService) GetVersion() string {
+	return mtproto.GetVersion()
+}
+
 // GetClients returns every mtproto client across all inbounds (ascending id).
 func (s *MtprotoClientService) GetClients() ([]model.MtprotoClient, error) {
 	db := database.GetDB()

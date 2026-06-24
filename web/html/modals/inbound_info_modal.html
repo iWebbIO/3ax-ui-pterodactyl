@@ -25,6 +25,8 @@
           <td>{{ i18n "protocol" }}</td>
           <td>
             <a-tag color="purple">[[ dbInbound.protocolDisplayName ]]</a-tag>
+            <a-tag v-if="dbInbound.isMtproto && app.mtprotoVersion && app.mtprotoVersion !== 'unknown'"
+              color="green">[[ app.mtprotoVersion ]]</a-tag>
           </td>
         </tr>
         <tr>
@@ -380,8 +382,11 @@
               </td>
             </tr>
           </table>
+          <!-- MTProto clients aren't part of the subscription system (they live
+               in their own table, not client_traffics), so the sub link can't
+               include them — hide it. -->
           <template
-            v-if="app.subSettings.enable && infoModal.clientSettings.subId">
+            v-if="app.subSettings.enable && infoModal.clientSettings.subId && !dbInbound.isMtproto">
             <a-divider>Subscription URL</a-divider>
             <tr-info-row class="tr-info-row">
               <tr-info-title class="tr-info-title">
@@ -740,6 +745,11 @@
         this.links = [];
       } else if (this.inbound.protocol == Protocols.WIREGUARD) {
         this.links = this.inbound.genInboundLinks(dbInbound.remark).split('\r\n')
+      } else if (this.inbound.protocol == Protocols.MTPROTO) {
+        // The tg:// link carries no name, so this label is only for the panel.
+        // Use just the client's name to avoid the confusing "<inbound>-<client>"
+        // (e.g. "Anya-Phone-Vova-test").
+        this.links = this.inbound.genAllLinks('', '-e', this.clientSettings);
       } else {
         this.links = this.inbound.genAllLinks(this.dbInbound.remark, app.remarkModel, this.clientSettings);
       }
