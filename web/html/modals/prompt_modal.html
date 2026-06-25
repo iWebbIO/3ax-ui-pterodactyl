@@ -16,8 +16,8 @@
         okText: '{{ i18n "sure"}}',
         visible: false,
         confirmLoading: false,
-        // Wide (1200px) for pasting JSON, clamped to the screen.
-        width: 1200,
+        // Wide (1000px) for pasting JSON, clamped to the screen.
+        width: 1000,
         keyEnter(e) {
             if (this.type !== 'textarea') {
                 e.preventDefault();
@@ -46,7 +46,7 @@
             this.value = value;
             this.okText = okText;
             this.confirm = confirm;
-            this.width = Math.min(1200, window.innerWidth - 48);
+            this.width = Math.min(1000, window.innerWidth - 48);
             this.visible = true;
             promptModalApp.$nextTick(() => {
                 document.querySelector('#prompt-modal-input').focus();

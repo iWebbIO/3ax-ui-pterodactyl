@@ -932,16 +932,26 @@ mtg_multi_arch() {
 # Installs latest mtg-multi as bin/mtg-multi-linux-{FNAME}; returns 1 on failure.
 install_mtg_multi() {
     local target_bin_dir="$1"
-    local mm_arch mm_fname mm_ver mm_url tmp_tgz tmp_dir extracted
+    local mm_arch mm_fname mm_ver mm_url tmp_tgz tmp_dir extracted installed_bin installed_ver
     mm_arch=$(mtg_multi_arch)
     mm_fname=$(mtg_panel_arch)
     [[ -z "$mm_arch" || -z "$mm_fname" ]] && return 1
-    if [[ -f "$target_bin_dir/mtg-multi-linux-${mm_fname}" ]]; then
-        chmod +x "$target_bin_dir/mtg-multi-linux-${mm_fname}" >/dev/null 2>&1
-        return 0
-    fi
+    installed_bin="$target_bin_dir/mtg-multi-linux-${mm_fname}"
+
+    # The user opted for "always latest": resolve the newest release tag and, if a
+    # binary is already installed, upgrade it only when it is out of date.
     mm_ver=$(${curl_bin:-curl} -4 -Ls "https://api.github.com/repos/dolonet/mtg-multi/releases/latest" 2>/dev/null \
         | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -n1)
+    if [[ -f "$installed_bin" ]]; then
+        chmod +x "$installed_bin" >/dev/null 2>&1
+        # Can't resolve the latest version (e.g. API rate limit) — keep what we have.
+        [[ -z "$mm_ver" ]] && return 0
+        installed_ver=$("$installed_bin" --version 2>/dev/null | awk '{print $1}')
+        if [[ "$installed_ver" == "$mm_ver" ]]; then
+            return 0
+        fi
+        echo -e "${green}Updating mtg-multi ${installed_ver:-unknown} -> ${mm_ver}...${plain}"
+    fi
     [[ -z "$mm_ver" ]] && return 1
     mm_url="https://github.com/dolonet/mtg-multi/releases/download/v${mm_ver}/mtg-multi-${mm_ver}-linux-${mm_arch}.tar.gz"
     echo -e "${green}Downloading mtg-multi (multi-user MTProto)...${plain}"

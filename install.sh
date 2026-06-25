@@ -1646,17 +1646,22 @@ mtg_multi_arch() {
 # on success, 1 otherwise (caller then falls back to single-secret mtg).
 install_mtg_multi() {
     local target_bin_dir="$1"
-    local mm_arch mm_fname mm_ver mm_url tmp_tgz tmp_dir extracted
+    local mm_arch mm_fname mm_ver mm_url tmp_tgz tmp_dir extracted installed_bin installed_ver
     mm_arch=$(mtg_multi_arch)
     mm_fname=$(mtg_panel_arch)
     [[ -z "$mm_arch" || -z "$mm_fname" ]] && return 1
-    if [[ -f "$target_bin_dir/mtg-multi-linux-${mm_fname}" ]]; then
-        chmod +x "$target_bin_dir/mtg-multi-linux-${mm_fname}"
-        return 0
-    fi
+    installed_bin="$target_bin_dir/mtg-multi-linux-${mm_fname}"
     # Resolve the latest mtg-multi tag (the user opted for "always latest").
     mm_ver=$(curl -4 -Ls "https://api.github.com/repos/dolonet/mtg-multi/releases/latest" 2>/dev/null \
         | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -n1)
+    if [[ -f "$installed_bin" ]]; then
+        chmod +x "$installed_bin"
+        # Keep the existing binary if we can't resolve the latest or it's current.
+        [[ -z "$mm_ver" ]] && return 0
+        installed_ver=$("$installed_bin" --version 2>/dev/null | awk '{print $1}')
+        [[ "$installed_ver" == "$mm_ver" ]] && return 0
+        echo -e "${green}Updating mtg-multi ${installed_ver:-unknown} -> ${mm_ver}...${plain}"
+    fi
     [[ -z "$mm_ver" ]] && return 1
     mm_url="https://github.com/dolonet/mtg-multi/releases/download/v${mm_ver}/mtg-multi-${mm_ver}-linux-${mm_arch}.tar.gz"
     echo -e "${green}Downloading mtg-multi (multi-user MTProto) ${mm_url}...${plain}"
