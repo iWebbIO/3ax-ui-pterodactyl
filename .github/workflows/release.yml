@@ -51,6 +51,9 @@ jobs:
         permissions:
             contents: write
         strategy:
+            # Don't let one flaky arch (e.g. a transient download failure)
+            # cancel the others — each platform builds/uploads independently.
+            fail-fast: false
             matrix:
                 platform:
                     - amd64
@@ -73,6 +76,17 @@ jobs:
 
             - name: Build 3X-UI
               run: |
+                  # Make GitHub / 3rd-party downloads resilient to anonymous
+                  # rate-limits and transient 5xx — the "server issued an error
+                  # response" (wget exit 8) that broke a release build. Plain
+                  # --tries only retries network errors, so also retry on HTTP
+                  # error codes. Applies to every wget below via ~/.wgetrc.
+                  cat > "$HOME/.wgetrc" <<'WGETRC'
+                  tries = 5
+                  waitretry = 15
+                  retry_connrefused = on
+                  retry_on_http_error = 429,500,502,503,504
+                  WGETRC
                   export CGO_ENABLED=1
                   export GOOS=linux
                   export GOARCH=${{ matrix.platform }}
