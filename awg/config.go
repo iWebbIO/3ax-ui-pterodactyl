@@ -38,6 +38,40 @@ func DetectDefaultInterface() string {
 	return "eth0"
 }
 
+// writeObfuscation writes the AmneziaWG obfuscation parameters that must be
+// identical on both ends of a tunnel. S3/S4 and I1 are emitted only when set,
+// so a 1.x server (S3=S4=0, I1="") yields byte-identical output to the original
+// generator; a 2.0 server adds the extra padding, header ranges and CPS packet.
+func writeObfuscation(b *strings.Builder, server *model.AwgServer) {
+	fmt.Fprintf(b, "Jc = %d\n", server.Jc)
+	fmt.Fprintf(b, "Jmin = %d\n", server.Jmin)
+	fmt.Fprintf(b, "Jmax = %d\n", server.Jmax)
+	fmt.Fprintf(b, "S1 = %d\n", server.S1)
+	fmt.Fprintf(b, "S2 = %d\n", server.S2)
+	if server.S3 > 0 {
+		fmt.Fprintf(b, "S3 = %d\n", server.S3)
+	}
+	if server.S4 > 0 {
+		fmt.Fprintf(b, "S4 = %d\n", server.S4)
+	}
+	fmt.Fprintf(b, "H1 = %s\n", hOrDefault(server.H1, "1"))
+	fmt.Fprintf(b, "H2 = %s\n", hOrDefault(server.H2, "2"))
+	fmt.Fprintf(b, "H3 = %s\n", hOrDefault(server.H3, "3"))
+	fmt.Fprintf(b, "H4 = %s\n", hOrDefault(server.H4, "4"))
+	if server.I1 != "" {
+		fmt.Fprintf(b, "I1 = %s\n", server.I1)
+	}
+}
+
+// hOrDefault returns def when v is blank, guarding against an empty H value
+// (which would emit an invalid "H1 = " line) on legacy/partial records.
+func hOrDefault(v, def string) string {
+	if strings.TrimSpace(v) == "" {
+		return def
+	}
+	return v
+}
+
 // GenerateServerConfig builds the awg0.conf content from server settings and clients.
 func GenerateServerConfig(server *model.AwgServer, clients []model.AwgClient) string {
 	var b strings.Builder
@@ -59,15 +93,7 @@ func GenerateServerConfig(server *model.AwgServer, clients []model.AwgClient) st
 	}
 
 	// AmneziaWG obfuscation parameters
-	b.WriteString(fmt.Sprintf("Jc = %d\n", server.Jc))
-	b.WriteString(fmt.Sprintf("Jmin = %d\n", server.Jmin))
-	b.WriteString(fmt.Sprintf("Jmax = %d\n", server.Jmax))
-	b.WriteString(fmt.Sprintf("S1 = %d\n", server.S1))
-	b.WriteString(fmt.Sprintf("S2 = %d\n", server.S2))
-	b.WriteString(fmt.Sprintf("H1 = %d\n", server.H1))
-	b.WriteString(fmt.Sprintf("H2 = %d\n", server.H2))
-	b.WriteString(fmt.Sprintf("H3 = %d\n", server.H3))
-	b.WriteString(fmt.Sprintf("H4 = %d\n", server.H4))
+	writeObfuscation(&b, server)
 
 	// PostUp / PostDown
 	postUp := server.PostUp
@@ -116,8 +142,17 @@ func GenerateClientConfig(server *model.AwgServer, client *model.AwgClient) stri
 	}
 	b.WriteString(fmt.Sprintf("Address = %s\n", strings.Join(addresses, ", ")))
 
-	if server.DNS != "" {
-		b.WriteString(fmt.Sprintf("DNS = %s\n", server.DNS))
+	// Compose the client DNS line from the per-family fields; the IPv6 DNS is
+	// included only when IPv6 is enabled on the server.
+	var dnsParts []string
+	if server.DnsIpv4 != "" {
+		dnsParts = append(dnsParts, server.DnsIpv4)
+	}
+	if server.IPv6Enabled && server.DnsIpv6 != "" {
+		dnsParts = append(dnsParts, server.DnsIpv6)
+	}
+	if len(dnsParts) > 0 {
+		b.WriteString(fmt.Sprintf("DNS = %s\n", strings.Join(dnsParts, ", ")))
 	}
 
 	if server.MTU > 0 {
@@ -125,15 +160,7 @@ func GenerateClientConfig(server *model.AwgServer, client *model.AwgClient) stri
 	}
 
 	// AmneziaWG obfuscation — client must have same params as server
-	b.WriteString(fmt.Sprintf("Jc = %d\n", server.Jc))
-	b.WriteString(fmt.Sprintf("Jmin = %d\n", server.Jmin))
-	b.WriteString(fmt.Sprintf("Jmax = %d\n", server.Jmax))
-	b.WriteString(fmt.Sprintf("S1 = %d\n", server.S1))
-	b.WriteString(fmt.Sprintf("S2 = %d\n", server.S2))
-	b.WriteString(fmt.Sprintf("H1 = %d\n", server.H1))
-	b.WriteString(fmt.Sprintf("H2 = %d\n", server.H2))
-	b.WriteString(fmt.Sprintf("H3 = %d\n", server.H3))
-	b.WriteString(fmt.Sprintf("H4 = %d\n", server.H4))
+	writeObfuscation(&b, server)
 
 	// Server peer
 	b.WriteString("\n[Peer]\n")

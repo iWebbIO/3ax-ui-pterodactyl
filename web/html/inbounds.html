@@ -401,6 +401,10 @@
                                                 >{{ i18n "none"
                                                 }}</a-radio-button
                                             >
+                                            <a-radio-button value="active"
+                                                >{{ i18n "subscription.active"
+                                                }}</a-radio-button
+                                            >
                                             <a-radio-button value="deactive"
                                                 >{{ i18n "disabled"
                                                 }}</a-radio-button
@@ -483,6 +487,16 @@
                                                             ></a-icon>
                                                             {{ i18n
                                                             "pages.client.bulk"}}
+                                                        </a-menu-item>
+                                                        <a-menu-item
+                                                            key="copyClients"
+                                                            v-if="dbInbound.protocol !== Protocols.AMNEZIAWG && dbInbound.protocol !== Protocols.NATIVEWG"
+                                                        >
+                                                            <a-icon
+                                                                type="copy"
+                                                            ></a-icon>
+                                                            {{ i18n
+                                                            "pages.client.copyFromInbound"}}
                                                         </a-menu-item>
                                                         <a-menu-item
                                                             key="resetClients"
@@ -1384,7 +1398,8 @@
 "component/aPersianDatepicker" .}} {{template "modals/inboundModal"}} {{template
 "modals/promptModal"}} {{template "modals/qrcodeModal"}} {{template
 "modals/textModal"}} {{template "modals/inboundInfoModal"}} {{template
-"modals/clientsModal"}} {{template "modals/clientsBulkModal"}}
+"modals/clientsModal"}} {{template "modals/clientsBulkModal"}} {{template
+"modals/copyClientsModal" .}}
 <script>
     const columns = [
         {
@@ -1667,8 +1682,7 @@
             defaultKey: "",
             clientCount: [],
             onlineClients: [],
-            awgOnlineClients: [],
-            wgOnlineClients: [],
+            mtprotoVersion: "",
             lastOnlineMap: {},
             isRefreshEnabled:
                 localStorage.getItem("isRefreshEnabled") === "true"
@@ -1723,6 +1737,9 @@
                 // Enrich nativewg inbounds with WG client data
                 await this.enrichNativewgInbounds(msg.obj);
 
+                // Enrich mtproto inbounds with MTProto client data
+                await this.enrichMtprotoInbounds(msg.obj);
+
                 this.setInbounds(msg.obj);
                 setTimeout(() => {
                     this.refreshing = false;
@@ -1774,6 +1791,7 @@
                                 email: c.email,
                                 up: c.upload || 0,
                                 down: c.download || 0,
+                                allTime: c.allTime || 0,
                                 total: c.totalGB || 0,
                                 expiryTime: c.expiryTime || 0,
                             }));
@@ -1790,21 +1808,14 @@
                                 (sum, c) => sum + (c.allTime || 0),
                                 0,
                             );
-                            // Track WG online clients by UUID (not email) to ensure cross-protocol uniqueness
-                            const now = Date.now();
-                            const wgOnline = [];
+                            // Online state comes from the unified onlineClients
+                            // list (realtime via the traffic ws); here we only
+                            // keep the per-uuid "last seen" timestamps.
                             for (const c of wgMsg.obj) {
-                                if (
-                                    c.lastOnline &&
-                                    now - c.lastOnline < 180000
-                                ) {
-                                    wgOnline.push(c.uuid);
-                                }
                                 if (c.lastOnline > 0) {
                                     this.lastOnlineMap[c.uuid] = c.lastOnline;
                                 }
                             }
-                            this.wgOnlineClients = wgOnline;
                         }
                     } catch (e) {
                         console.error("Failed to fetch WG clients:", e);
@@ -1848,7 +1859,11 @@
                                 updated_at: c.updatedAt || 0,
                             }));
                             inbound.settings = JSON.stringify({ clients });
-                            // Map AWG client traffic to clientStats format
+                            // Map AWG client traffic to clientStats format.
+                            // allTime is the lifetime total (preserved across
+                            // interface restarts); without it the per-client
+                            // "Total traffic" column falls back to the current
+                            // session up+down and shows 0 after a restart.
                             inbound.clientStats = awgMsg.obj.map((c) => ({
                                 id: c.id,
                                 uuid: c.uuid || "",
@@ -1857,6 +1872,7 @@
                                 email: c.email,
                                 up: c.upload || 0,
                                 down: c.download || 0,
+                                allTime: c.allTime || 0,
                                 total: c.totalGB || 0,
                                 expiryTime: c.expiryTime || 0,
                             }));
@@ -1873,24 +1889,108 @@
                                 (sum, c) => sum + (c.allTime || 0),
                                 0,
                             );
-                            // Track AWG online clients by UUID (not email) to ensure cross-protocol uniqueness
-                            const now = Date.now();
-                            const awgOnline = [];
+                            // Online state comes from the unified onlineClients
+                            // list (realtime via the traffic ws); here we only
+                            // keep the per-uuid "last seen" timestamps.
                             for (const c of awgMsg.obj) {
-                                if (
-                                    c.lastOnline &&
-                                    now - c.lastOnline < 180000
-                                ) {
-                                    awgOnline.push(c.uuid);
-                                }
                                 if (c.lastOnline > 0) {
                                     this.lastOnlineMap[c.uuid] = c.lastOnline;
                                 }
                             }
-                            this.awgOnlineClients = awgOnline;
                         }
                     } catch (e) {
                         console.error("Failed to fetch AWG clients:", e);
+                    }
+                }
+            },
+            async enrichMtprotoInbounds(inbounds) {
+                if (!inbounds.some((i) => i.protocol === Protocols.MTPROTO)) {
+                    return;
+                }
+                // Fetch the mtg/mtg-multi sidecar version once (shown in details).
+                if (!this.mtprotoVersion) {
+                    try {
+                        const vMsg = await HttpUtil.get(
+                            "/panel/api/mtproto/version",
+                        );
+                        if (vMsg && vMsg.success && vMsg.obj) {
+                            this.mtprotoVersion = vMsg.obj;
+                        }
+                    } catch (e) {
+                        /* non-fatal */
+                    }
+                }
+                let clientsMsg;
+                try {
+                    clientsMsg = await HttpUtil.get(
+                        "/panel/api/mtproto/clients",
+                    );
+                } catch (e) {
+                    console.error("Failed to fetch MTProto clients:", e);
+                    return;
+                }
+                if (!clientsMsg || !clientsMsg.success || !clientsMsg.obj) {
+                    return;
+                }
+                const all = clientsMsg.obj;
+                for (const inbound of inbounds) {
+                    if (inbound.protocol !== Protocols.MTPROTO) continue;
+                    const rows = all.filter((c) => c.inboundId === inbound.id);
+                    // Inject the table's clients into settings (preserving the
+                    // inbound-level config the edit form needs), each carrying its
+                    // own FakeTLS secret for the per-client link/QR.
+                    let s = {};
+                    try {
+                        s = JSON.parse(inbound.settings || "{}");
+                    } catch (e) {
+                        s = {};
+                    }
+                    s.clients = rows.map((c) => ({
+                        id: c.uuid || "",
+                        secret: c.secret || "",
+                        email: c.email,
+                        enable: c.enable,
+                        comment: c.comment || "",
+                        totalGB: c.totalGB || 0,
+                        expiryTime: c.expiryTime || 0,
+                        reset: c.reset || 0,
+                        subId: c.subId || "",
+                        tgId: c.tgId || 0,
+                        limitIp: c.limitIp || 0,
+                        _mtId: c.id,
+                        created_at: c.createdAt || 0,
+                        updated_at: c.updatedAt || 0,
+                    }));
+                    inbound.settings = JSON.stringify(s);
+                    // Map client traffic to clientStats (allTime is the lifetime
+                    // total, keyed by UUID so duplicate emails don't collide).
+                    inbound.clientStats = rows.map((c) => ({
+                        id: c.id,
+                        uuid: c.uuid || "",
+                        inboundId: inbound.id,
+                        enable: c.enable,
+                        email: c.email,
+                        up: c.upload || 0,
+                        down: c.download || 0,
+                        allTime: c.allTime || 0,
+                        total: c.totalGB || 0,
+                        expiryTime: c.expiryTime || 0,
+                    }));
+                    inbound.up = rows.reduce((sum, c) => sum + (c.upload || 0), 0);
+                    inbound.down = rows.reduce(
+                        (sum, c) => sum + (c.download || 0),
+                        0,
+                    );
+                    inbound.allTime = rows.reduce(
+                        (sum, c) => sum + (c.allTime || 0),
+                        0,
+                    );
+                    // Online state comes from the unified onlineClients list
+                    // (realtime via the traffic ws); keep only the "last seen".
+                    for (const c of rows) {
+                        if (c.lastOnline > 0) {
+                            this.lastOnlineMap[c.uuid] = c.lastOnline;
+                        }
                     }
                 }
             },
@@ -1952,6 +2052,7 @@
                             Protocols.SHADOWSOCKS,
                             Protocols.AMNEZIAWG,
                             Protocols.NATIVEWG,
+                            Protocols.MTPROTO,
                         ].includes(inbound.protocol)
                     ) {
                         if (dbInbound.isSS && !to_inbound.isSSMultiUser) {
@@ -2064,7 +2165,8 @@
             isUuidClientProtocol(protocol) {
                 return (
                     protocol === Protocols.AMNEZIAWG ||
-                    protocol === Protocols.NATIVEWG
+                    protocol === Protocols.NATIVEWG ||
+                    protocol === Protocols.MTPROTO
                 );
             },
             getClientLookupKey(protocol, client) {
@@ -2241,6 +2343,9 @@
                         break;
                     case "addBulkClient":
                         this.openAddBulkClient(dbInbound.id);
+                        break;
+                    case "copyClients":
+                        copyClientsModal.show(dbInbound);
                         break;
                     case "export":
                         this.inboundLinks(dbInbound.id);
@@ -2499,6 +2604,7 @@
                         );
                     case Protocols.AMNEZIAWG:
                     case Protocols.NATIVEWG:
+                    case Protocols.MTPROTO:
                         return clients.findIndex(
                             (item) => item && item.id === client.id,
                         );
@@ -2531,6 +2637,10 @@
                     await this.addNativewgClient(clients, modal);
                     return;
                 }
+                if (dbInbound && dbInbound.isMtproto) {
+                    await this.addMtprotoClient(clients, dbInboundId, modal);
+                    return;
+                }
                 const data = {
                     id: dbInboundId,
                     settings: '{"clients": [' + clients.toString() + "]}",
@@ -2548,6 +2658,10 @@
                 }
                 if (dbInbound && dbInbound.isNativewg) {
                     await this.updateNativewgClient(client, clientId);
+                    return;
+                }
+                if (dbInbound && dbInbound.isMtproto) {
+                    await this.updateMtprotoClient(client, clientId);
                     return;
                 }
                 const data = {
@@ -2708,6 +2822,63 @@
                     clientModal.loading(false);
                 }
             },
+            async addMtprotoClient(clients, dbInboundId, modal) {
+                modal.loading();
+                const clientList = Array.isArray(clients) ? clients : [clients];
+                let success = true;
+                for (const client of clientList) {
+                    const data = {
+                        inboundId: dbInboundId,
+                        email: client.email,
+                        comment: client.comment || "",
+                        enable: client.enable,
+                        totalGB: client.totalGB || 0,
+                        expiryTime: client.expiryTime || 0,
+                        reset: client.reset || 0,
+                        limitIp: client.limitIp || 0,
+                        tgId: client.tgId || 0,
+                        subId: client.subId || "",
+                    };
+                    const msg = await HttpUtil.postJson(
+                        "/panel/api/mtproto/client/add",
+                        data,
+                    );
+                    if (!msg.success) {
+                        success = false;
+                        break;
+                    }
+                }
+                if (success) {
+                    modal.close();
+                    await this.getDBInbounds();
+                } else {
+                    modal.loading(false);
+                }
+            },
+            async updateMtprotoClient(client, clientId) {
+                clientModal.loading();
+                const data = {
+                    email: client.email,
+                    comment: client.comment || "",
+                    enable: client.enable,
+                    totalGB: client.totalGB || 0,
+                    expiryTime: client.expiryTime || 0,
+                    reset: client.reset || 0,
+                    limitIp: client.limitIp || 0,
+                    tgId: client.tgId || 0,
+                    subId: client.subId || "",
+                };
+                const msg = await HttpUtil.postJson(
+                    `/panel/api/mtproto/client/updateByUuid/${encodeURIComponent(clientId)}`,
+                    data,
+                );
+                if (msg.success) {
+                    clientModal.close();
+                    await this.getDBInbounds();
+                } else {
+                    clientModal.loading(false);
+                }
+            },
             resetTraffic(dbInboundId) {
                 dbInbound = this.dbInbounds.find(
                     (row) => row.id === dbInboundId,
@@ -2750,9 +2921,14 @@
                 clientId = this.getClientId(dbInbound.protocol, client);
                 const isAwg = dbInbound && dbInbound.isAmneziawg;
                 const isWg = dbInbound && dbInbound.isNativewg;
+                const isMtproto = dbInbound && dbInbound.isMtproto;
                 const doDelete = async () => {
-                    if (isAwg || isWg) {
-                        const endpoint = isAwg ? "awg" : "wg";
+                    if (isAwg || isWg || isMtproto) {
+                        const endpoint = isAwg
+                            ? "awg"
+                            : isWg
+                              ? "wg"
+                              : "mtproto";
                         if (!client.id) return;
                         const msg = await HttpUtil.postJson(
                             `/panel/api/${endpoint}/client/delByUuid/${encodeURIComponent(client.id)}`,
@@ -2795,7 +2971,7 @@
                             const inbound = dbInbound.toInbound();
                             if (inbound) {
                                 const clients = inbound.clients;
-                                if (clients.length > 0) {
+                                if (clients && clients.length > 0) {
                                     clients.forEach((client) => {
                                         if (
                                             client["subId"] ===
@@ -2939,12 +3115,13 @@
                 );
                 const isAwg = dbInbound && dbInbound.isAmneziawg;
                 const isWg = dbInbound && dbInbound.isNativewg;
-                if ((isAwg || isWg) && !client.id) {
+                const isMtproto = dbInbound && dbInbound.isMtproto;
+                if ((isAwg || isWg || isMtproto) && !client.id) {
                     return;
                 }
                 const resetUrl =
-                    isAwg || isWg
-                        ? `/panel/api/${isAwg ? "awg" : "wg"}/client/resetTrafficByUuid/${encodeURIComponent(client.id || "")}`
+                    isAwg || isWg || isMtproto
+                        ? `/panel/api/${isAwg ? "awg" : isWg ? "wg" : "mtproto"}/client/resetTrafficByUuid/${encodeURIComponent(client.id || "")}`
                         : "/panel/api/inbounds/" +
                           dbInboundId +
                           "/resetClientTraffic/" +
@@ -3118,13 +3295,12 @@
                 const expired = hasExpiry && expiryTime <= now;
                 return expired || exhausted;
             },
-            isClientOnline(email, protocol) {
-                if (protocol === "amneziawg") {
-                    return this.awgOnlineClients.includes(email);
-                } else if (protocol === "nativewg") {
-                    return this.wgOnlineClients.includes(email);
-                }
-                return this.onlineClients.includes(email);
+            isClientOnline(clientKey, protocol) {
+                // Online for every protocol comes from the single onlineClients
+                // list (xray emails + AWG/WG/MTProto uuids), refreshed in realtime
+                // by the "traffic" websocket event — so non-xray protocols update
+                // live instead of only on a full inbound refresh.
+                return this.onlineClients.includes(clientKey);
             },
             getLastOnline(email) {
                 return this.lastOnlineMap[email] || null;
@@ -3309,6 +3485,7 @@
                     if (payload && Array.isArray(payload)) {
                         await this.enrichAwgInbounds(payload);
                         await this.enrichNativewgInbounds(payload);
+                        await this.enrichMtprotoInbounds(payload);
                         this.setInbounds(payload);
                     }
                 });
@@ -3336,17 +3513,21 @@
                         }
                         this.onlineClients = nextOnlineClients;
                         if (onlineChanged) {
-                            // Recalculate client counts to update online status
+                            // Recalculate client counts to update online status.
+                            // Use $set: assigning clientCount[id] by index is not
+                            // reactive in Vue 2, so the online-count badge would
+                            // otherwise stay stale while the per-client badges
+                            // (which read the reactive onlineClients) update.
                             this.dbInbounds.forEach((dbInbound) => {
                                 const inbound = this.inbounds.find(
                                     (ib) => ib.id === dbInbound.id,
                                 );
                                 if (inbound && this.clientCount[dbInbound.id]) {
-                                    this.clientCount[dbInbound.id] =
-                                        this.getClientCounts(
-                                            dbInbound,
-                                            inbound,
-                                        );
+                                    this.$set(
+                                        this.clientCount,
+                                        dbInbound.id,
+                                        this.getClientCounts(dbInbound, inbound),
+                                    );
                                 }
                             });
 

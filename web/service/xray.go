@@ -107,7 +107,7 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		return nil, err
 	}
 
-	s.inboundService.AddTraffic(nil, nil)
+	_, _, _ = s.inboundService.AddTraffic(nil, nil)
 
 	inbounds, err := s.inboundService.GetAllInbounds()
 	if err != nil {
@@ -117,8 +117,9 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		if !inbound.Enable {
 			continue
 		}
-		// Skip AmneziaWG and NativeWG — they are not Xray protocols
-		if inbound.Protocol == model.AmneziaWG || inbound.Protocol == model.NativeWG {
+		// Skip AmneziaWG, NativeWG and MTProto — they are not Xray protocols
+		// (MTProto runs as a standalone mtg sidecar; see the mtproto package).
+		if inbound.Protocol == model.AmneziaWG || inbound.Protocol == model.NativeWG || inbound.Protocol == model.MTProto {
 			continue
 		}
 		// get settings clients
@@ -126,27 +127,18 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		json.Unmarshal([]byte(inbound.Settings), &settings)
 		clients, ok := settings["clients"].([]any)
 		if ok {
-			// check users active or not
+			// Fast O(N) lookup map for client traffic enablement
 			clientStats := inbound.ClientStats
+			enableMap := make(map[string]bool, len(clientStats))
 			for _, clientTraffic := range clientStats {
-				indexDecrease := 0
-				for index, client := range clients {
-					c := client.(map[string]any)
-					if c["email"] == clientTraffic.Email {
-						if !clientTraffic.Enable {
-							clients = RemoveIndex(clients, index-indexDecrease)
-							indexDecrease++
-							logger.Infof("Remove Inbound User %s due to expiration or traffic limit", c["email"])
-						}
-					}
-				}
+				enableMap[clientTraffic.Email] = clientTraffic.Enable
 			}
 
-			// MIXED (SOCKS5) and HTTP inbounds use xray's settings.accounts[]={user,pass}.
-			// Translate panel's clients[] to that shape, dropping panel-only fields and
-			// disabled users — the basic-auth username acts as the per-user identity that
-			// xray reports back in its stats keys (user>>>EMAIL>>>traffic>>>...).
 			if inbound.Protocol == model.Mixed || inbound.Protocol == model.HTTP {
+				// MIXED (SOCKS5) and HTTP inbounds use xray's settings.accounts[]={user,pass}.
+				// Translate panel's clients[] to that shape, dropping panel-only fields and
+				// disabled users — the basic-auth username acts as the per-user identity that
+				// xray reports back in its stats keys (user>>>EMAIL>>>traffic>>>...).
 				accounts := make([]any, 0, len(clients))
 				for _, client := range clients {
 					c, ok := client.(map[string]any)
@@ -173,40 +165,47 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 						settings["auth"] = "password"
 					}
 				}
-				modifiedSettings, err := json.MarshalIndent(settings, "", "  ")
-				if err != nil {
-					return nil, err
-				}
-				inbound.Settings = string(modifiedSettings)
 			} else {
-				// clear client config for additional parameters
+				// filter and clean clients
 				var final_clients []any
 				for _, client := range clients {
-					c := client.(map[string]any)
-					if c["enable"] != nil {
-						if enable, ok := c["enable"].(bool); ok && !enable {
-							continue
-						}
+					c, ok := client.(map[string]any)
+					if !ok {
+						continue
 					}
+
+					email, _ := c["email"].(string)
+
+					// check users active or not via stats
+					if enable, exists := enableMap[email]; exists && !enable {
+						logger.Infof("Remove Inbound User %s due to expiration or traffic limit", email)
+						continue
+					}
+
+					// check manual disabled flag
+					if manualEnable, ok := c["enable"].(bool); ok && !manualEnable {
+						continue
+					}
+
+					// clear client config for additional parameters
 					for key := range c {
-						if key != "email" && key != "id" && key != "password" && key != "flow" && key != "method" {
+						if key != "email" && key != "id" && key != "password" && key != "flow" && key != "method" && key != "auth" && key != "reverse" {
 							delete(c, key)
 						}
-						if c["flow"] == "xtls-rprx-vision-udp443" {
+						if flow, ok := c["flow"].(string); ok && flow == "xtls-rprx-vision-udp443" {
 							c["flow"] = "xtls-rprx-vision"
 						}
 					}
 					final_clients = append(final_clients, any(c))
 				}
-
 				settings["clients"] = final_clients
-				modifiedSettings, err := json.MarshalIndent(settings, "", "  ")
-				if err != nil {
-					return nil, err
-				}
-
-				inbound.Settings = string(modifiedSettings)
 			}
+
+			modifiedSettings, err := json.MarshalIndent(settings, "", "  ")
+			if err != nil {
+				return nil, err
+			}
+			inbound.Settings = string(modifiedSettings)
 		}
 
 		if len(inbound.StreamSettings) > 0 {
@@ -245,7 +244,110 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 	// traffic into Xray we need a sink for the TPROXY-redirected packets.
 	xrayConfig.InboundConfigs = append(xrayConfig.InboundConfigs, tunnelTproxyInbounds()...)
 
+	// Route opted-in mtproto inbounds through Xray's router. Each one gets a
+	// loopback SOCKS bridge — tagged with the inbound's own tag — that its mtg
+	// sidecar dials Telegram through, plus an optional routing rule sending that
+	// tag to a selected outbound (e.g. a chain to a server where Telegram is
+	// reachable). mtproto inbounds are skipped from the main loop above (not Xray
+	// protocols), so this is the only place their egress bridge is built.
+	for _, inbound := range inbounds {
+		if inbound.Protocol == model.MTProto && inbound.Enable {
+			injectMtprotoEgress(xrayConfig, inbound)
+		}
+	}
+
 	return xrayConfig, nil
+}
+
+// mtprotoEgressSocksSettings is the loopback SOCKS server a routed mtproto
+// inbound exposes for its mtg sidecar to dial Telegram through. mtg makes plain
+// TCP connections, so UDP is left off.
+const mtprotoEgressSocksSettings = `{"auth":"noauth","udp":false}`
+
+// routingTagIsBalancer reports whether tag names a balancer in the parsed
+// routing section. A field rule targets a balancer via balancerTag and a
+// concrete outbound via outboundTag, so the caller picks the right key.
+func routingTagIsBalancer(routing map[string]any, tag string) bool {
+	if tag == "" {
+		return false
+	}
+	balancers, ok := routing["balancers"].([]any)
+	if !ok {
+		return false
+	}
+	for _, b := range balancers {
+		bm, ok := b.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, ok := bm["tag"].(string); ok && t == tag {
+			return true
+		}
+	}
+	return false
+}
+
+// injectMtprotoEgress wires one routed mtproto inbound into the generated
+// config: it appends a loopback SOCKS inbound (tagged with the inbound's own
+// tag, on the egress port persisted in settings) and, when an outbound is
+// selected, prepends a routing rule sending that tag to it. Both live only in
+// the generated config — the stored template is untouched.
+func injectMtprotoEgress(cfg *xray.Config, inbound *model.Inbound) {
+	var parsed struct {
+		RouteThroughXray bool   `json:"routeThroughXray"`
+		RouteXrayPort    int    `json:"routeXrayPort"`
+		OutboundTag      string `json:"outboundTag"`
+	}
+	if err := json.Unmarshal([]byte(inbound.Settings), &parsed); err != nil {
+		return
+	}
+	if !parsed.RouteThroughXray || parsed.RouteXrayPort <= 0 || inbound.Tag == "" {
+		return
+	}
+	tag := inbound.Tag
+	for i := range cfg.InboundConfigs {
+		if cfg.InboundConfigs[i].Tag == tag {
+			logger.Warning("mtproto egress: inbound tag [", tag, "] already present in generated config, skipping bridge")
+			return
+		}
+	}
+
+	if parsed.OutboundTag != "" {
+		routing := map[string]any{}
+		parseOK := true
+		if len(cfg.RouterConfig) > 0 {
+			if err := json.Unmarshal(cfg.RouterConfig, &routing); err != nil {
+				logger.Warning("mtproto egress: routing section is unparsable, skipping rule:", err)
+				parseOK = false
+			}
+		}
+		if parseOK {
+			rules, _ := routing["rules"].([]any)
+			rule := map[string]any{
+				"type":       "field",
+				"inboundTag": []any{tag},
+			}
+			if routingTagIsBalancer(routing, parsed.OutboundTag) {
+				rule["balancerTag"] = parsed.OutboundTag
+			} else {
+				rule["outboundTag"] = parsed.OutboundTag
+			}
+			routing["rules"] = append([]any{rule}, rules...)
+			if newRouting, err := json.Marshal(routing); err == nil {
+				cfg.RouterConfig = json_util.RawMessage(newRouting)
+			} else {
+				logger.Warning("mtproto egress: failed to rebuild routing section, skipping rule:", err)
+			}
+		}
+	}
+
+	cfg.InboundConfigs = append(cfg.InboundConfigs, xray.InboundConfig{
+		Listen:   json_util.RawMessage(`"127.0.0.1"`),
+		Port:     parsed.RouteXrayPort,
+		Protocol: "socks",
+		Settings: json_util.RawMessage(mtprotoEgressSocksSettings),
+		Tag:      tag,
+	})
 }
 
 // tunnelTproxyInbounds builds dokodemo-door inbounds for every enabled
@@ -328,7 +430,10 @@ func (s *XrayService) GetXrayTraffic() ([]*xray.Traffic, []*xray.ClientTraffic, 
 		return nil, nil, err
 	}
 	apiPort := p.GetAPIPort()
-	s.xrayAPI.Init(apiPort)
+	if err := s.xrayAPI.Init(apiPort); err != nil {
+		logger.Debug("Failed to initialize Xray API:", err)
+		return nil, nil, err
+	}
 	defer s.xrayAPI.Close()
 
 	traffic, clientTraffic, err := s.xrayAPI.GetTraffic(true)

@@ -5,6 +5,13 @@
     :label-col="{ md: {span:8} }"
     :wrapper-col="{ md: {span:14} }"
 >
+    <a-alert
+        v-if="inbound.protocol === Protocols.MTPROTO"
+        type="info"
+        show-icon
+        :style="{ marginBottom: '10px' }"
+        message='{{ i18n "pages.inbounds.mtproto.hint" }}'
+    ></a-alert>
     <a-form-item label='{{ i18n "enable" }}'>
         <a-switch v-model="dbInbound.enable"></a-switch>
     </a-form-item>
@@ -21,7 +28,8 @@
             <a-select-option v-for="p in Protocols" :key="p" :value="p"
                 >[[ p === 'wireguard' ? 'Wireguard (Xray NAT66)' : p ===
                 'amneziawg' ? 'AmneziaWG (Native IPv6)' : p === 'nativewg' ?
-                'Wireguard (Native IPv6)' : p ]]</a-select-option
+                'Wireguard (Native IPv6)' : p === 'mtproto' ? 'MTProto (Telegram)'
+                : p ]]</a-select-option
             >
         </a-select>
     </a-form-item>
@@ -106,6 +114,10 @@
                     >{{ i18n "pages.inbounds.periodicTrafficReset.never"
                     }}</a-select-option
                 >
+                <a-select-option value="hourly"
+                    >{{ i18n "pages.inbounds.periodicTrafficReset.hourly"
+                    }}</a-select-option
+                >
                 <a-select-option value="daily"
                     >{{ i18n "pages.inbounds.periodicTrafficReset.daily"
                     }}</a-select-option
@@ -155,47 +167,52 @@
 
 <!-- vmess settings -->
 <template v-if="inbound.protocol === Protocols.VMESS">
-    {{template "form/vmess"}}
+    {{template "form/vmess" .}}
 </template>
 
 <!-- vless settings -->
 <template v-if="inbound.protocol === Protocols.VLESS">
-    {{template "form/vless"}}
+    {{template "form/vless" .}}
 </template>
 
 <!-- trojan settings -->
 <template v-if="inbound.protocol === Protocols.TROJAN">
-    {{template "form/trojan"}}
+    {{template "form/trojan" .}}
 </template>
 
 <!-- shadowsocks -->
 <template v-if="inbound.protocol === Protocols.SHADOWSOCKS">
-    {{template "form/shadowsocks"}}
+    {{template "form/shadowsocks" .}}
 </template>
 
 <!-- tunnel -->
 <template v-if="inbound.protocol === Protocols.TUNNEL">
-    {{template "form/tunnel"}}
+    {{template "form/tunnel" .}}
 </template>
 
 <!-- mixed -->
 <template v-if="inbound.protocol === Protocols.MIXED">
-    {{template "form/mixed"}}
+    {{template "form/mixed" .}}
 </template>
 
 <!-- http -->
 <template v-if="inbound.protocol === Protocols.HTTP">
-    {{template "form/http"}}
+    {{template "form/http" .}}
 </template>
 
 <!-- wireguard -->
 <template v-if="inbound.protocol === Protocols.WIREGUARD">
-    {{template "form/wireguard"}}
+    {{template "form/wireguard" .}}
 </template>
 
 <!-- tun -->
 <template v-if="inbound.protocol === Protocols.TUN">
-    {{template "form/tun"}}
+    {{template "form/tun" .}}
+</template>
+
+<!-- hysteria -->
+<template v-if="inbound.protocol === Protocols.HYSTERIA">
+    {{template "form/hysteria" .}}
 </template>
 
 <!-- amneziawg -->
@@ -208,22 +225,27 @@
     {{template "form/nativewg"}}
 </template>
 
+<!-- mtproto -->
+<template v-if="inbound.protocol === Protocols.MTPROTO">
+    {{template "form/mtproto"}}
+</template>
+
 <!-- stream settings -->
 <template v-if="inbound.canEnableStream()">
-    {{template "form/streamSettings"}} {{template "form/externalProxy" }}
+    {{template "form/streamSettings" .}} {{template "form/externalProxy" .}}
 </template>
 
 <!-- tls settings -->
 <template v-if="inbound.canEnableTls()">
-    {{template "form/tlsSettings"}}
+    {{template "form/tlsSettings" .}}
 </template>
 
 <!-- sniffing -->
 <a-collapse
-    v-if="inbound.protocol !== Protocols.AMNEZIAWG && inbound.protocol !== Protocols.NATIVEWG"
+    v-if="inbound.protocol !== Protocols.AMNEZIAWG && inbound.protocol !== Protocols.NATIVEWG && inbound.protocol !== Protocols.MTPROTO"
 >
     <a-collapse-panel header="Sniffing">
-        {{template "form/sniffing"}}
+        {{template "form/sniffing" .}}
     </a-collapse-panel>
 </a-collapse>
 

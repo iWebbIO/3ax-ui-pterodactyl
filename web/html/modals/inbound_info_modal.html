@@ -25,6 +25,8 @@
           <td>{{ i18n "protocol" }}</td>
           <td>
             <a-tag color="purple">[[ dbInbound.protocolDisplayName ]]</a-tag>
+            <a-tag v-if="dbInbound.isMtproto && app.mtprotoVersion && app.mtprotoVersion !== 'unknown'"
+              color="green">[[ app.mtprotoVersion ]]</a-tag>
           </td>
         </tr>
         <tr>
@@ -113,7 +115,7 @@
             </table>
           </template>
         </a-col>
-        <template v-if="dbInbound.hasLink()">
+        <template v-if="dbInbound.hasLink() && !dbInbound.isMtproto">
           {{ i18n "security" }}
           <a-tag :color="inbound.stream.security == 'none' ? 'red' : 'green'">[[
             inbound.stream.security ]]</a-tag>
@@ -140,6 +142,21 @@
               ? inbound.serverName : '' ]]</a-tag>
             <a-tag v-else color="orange">{{ i18n "none" }}</a-tag>
           </template>
+        </template>
+        <!-- MTProto isn't an Xray inbound, so the stream.security/encryption
+             fields are empty; show its real transport security instead. -->
+        <template v-if="dbInbound.isMtproto">
+          {{ i18n "security" }}
+          <a-tag color="green">FakeTLS</a-tag>
+          <br />
+          {{ i18n "encryption" }}
+          <a-tag color="green">MTProto 2.0 (AES-256-IGE)</a-tag>
+          <br />
+          {{ i18n "pages.inbounds.mtproto.fakeTlsDomain" }}
+          <a-tag v-if="inbound.settings.fakeTlsDomain" color="green">[[
+            inbound.settings.fakeTlsDomain ]]</a-tag>
+          <a-tag v-else color="orange">{{ i18n "none" }}</a-tag>
+          <br />
         </template>
         <table v-if="dbInbound.isSS"
           :style="{ marginBottom: '10px', width: '100%' }">
@@ -365,8 +382,11 @@
               </td>
             </tr>
           </table>
+          <!-- MTProto clients aren't part of the subscription system (they live
+               in their own table, not client_traffics), so the sub link can't
+               include them — hide it. -->
           <template
-            v-if="app.subSettings.enable && infoModal.clientSettings.subId">
+            v-if="app.subSettings.enable && infoModal.clientSettings.subId && !dbInbound.isMtproto">
             <a-divider>Subscription URL</a-divider>
             <tr-info-row class="tr-info-row">
               <tr-info-title class="tr-info-title">
@@ -433,10 +453,9 @@
                     icon="download" @click="downloadAwgConfig()"></a-button>
                 </a-tooltip>
               </tr-info-title>
-              <div v-html="infoModal.awgConfig.replaceAll('\n','<br />')"
-                :style="{ borderRadius: '0.5rem', padding: '0.5rem', fontFamily: 'monospace', fontSize: '12px' }"
-                class="client-table-odd-row">
-              </div>
+              <div
+                :style="{ borderRadius: '0.5rem', padding: '0.5rem', fontFamily: 'monospace', fontSize: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }"
+                class="client-table-odd-row">[[ infoModal.awgConfig ]]</div>
             </tr-info-row>
           </template>
           <template v-if="dbInbound.isNativewg && infoModal.wgConfig">
@@ -453,10 +472,9 @@
                     icon="download" @click="downloadWgConfig()"></a-button>
                 </a-tooltip>
               </tr-info-title>
-              <div v-html="infoModal.wgConfig.replaceAll('\n','<br />')"
-                :style="{ borderRadius: '0.5rem', padding: '0.5rem', fontFamily: 'monospace', fontSize: '12px' }"
-                class="client-table-odd-row">
-              </div>
+              <div
+                :style="{ borderRadius: '0.5rem', padding: '0.5rem', fontFamily: 'monospace', fontSize: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }"
+                class="client-table-odd-row">[[ infoModal.wgConfig ]]</div>
             </tr-info-row>
           </template>
         </template>
@@ -727,6 +745,11 @@
         this.links = [];
       } else if (this.inbound.protocol == Protocols.WIREGUARD) {
         this.links = this.inbound.genInboundLinks(dbInbound.remark).split('\r\n')
+      } else if (this.inbound.protocol == Protocols.MTPROTO) {
+        // The tg:// link carries no name, so this label is only for the panel.
+        // Use just the client's name to avoid the confusing "<inbound>-<client>"
+        // (e.g. "Anya-Phone-Vova-test").
+        this.links = this.inbound.genAllLinks('', '-e', this.clientSettings);
       } else {
         this.links = this.inbound.genAllLinks(this.dbInbound.remark, app.remarkModel, this.clientSettings);
       }

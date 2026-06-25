@@ -843,13 +843,19 @@ config_after_update() {
         echo -e "${yellow}⚠ SSL Certificate: Enabled and configured${plain}"
     else
         echo -e "${green}SSL certificate is already configured${plain}"
-        # Show access URL with existing certificate
+        # Show access URL with existing certificate. IP certificates are stored
+        # in /root/cert/ip, so the directory name is the literal "ip" — show the
+        # real detected server IP instead of printing "https://ip:...".
         local cert_domain=$(basename "$(dirname "$existing_cert")")
+        local access_host="$cert_domain"
+        if [[ "$cert_domain" == "ip" ]]; then
+            access_host="${server_ip:-$cert_domain}"
+        fi
         echo ""
         echo -e "${green}═══════════════════════════════════════════${plain}"
         echo -e "${green}     Panel Access Information              ${plain}"
         echo -e "${green}═══════════════════════════════════════════${plain}"
-        echo -e "${green}Access URL: https://${cert_domain}:${existing_port}/${existing_webBasePath}${plain}"
+        echo -e "${green}Access URL: https://${access_host}:${existing_port}/${existing_webBasePath}${plain}"
         echo -e "${green}═══════════════════════════════════════════${plain}"
     fi
 }
@@ -880,6 +886,133 @@ xray_panel_arch() {
         s390x) echo "s390x" ;;
         *) echo "" ;;
     esac
+}
+
+# Pinned mtg (MTProto FakeTLS sidecar, github.com/9seconds/mtg) version.
+MTG_VER="2.2.8"
+
+# mtg release-asset arch (empty = no prebuilt binary; s390x has none, armv5
+# falls back to the armv6 build).
+mtg_release_arch() {
+    case "$(arch)" in
+        amd64) echo "amd64" ;;
+        386) echo "386" ;;
+        arm64) echo "arm64" ;;
+        armv7) echo "armv7" ;;
+        armv6|armv5) echo "armv6" ;;
+        *) echo "" ;;
+    esac
+}
+
+# On-disk filename Go's mtproto package looks up: bin/mtg-linux-{FNAME}
+# (FNAME == runtime.GOARCH, so all 32-bit arm collapse to "arm").
+mtg_panel_arch() {
+    case "$(arch)" in
+        amd64) echo "amd64" ;;
+        386) echo "386" ;;
+        arm64) echo "arm64" ;;
+        armv7|armv6|armv5) echo "arm" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Ensures the mtg sidecar is present in the given bin dir as mtg-linux-{FNAME}.
+# No-op when already present (preserved across updates). Fully non-fatal: any
+# failure prints a notice and returns 0 — MTProto inbounds just won't start.
+# mtg-multi (dolonet/mtg-multi) = multi-user MTProto fork; prebuilt only for
+# linux amd64/arm64. Empty otherwise (fall back to single-secret mtg).
+mtg_multi_arch() {
+    case "$(arch)" in
+        amd64) echo "amd64" ;;
+        arm64) echo "arm64" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Installs latest mtg-multi as bin/mtg-multi-linux-{FNAME}; returns 1 on failure.
+install_mtg_multi() {
+    local target_bin_dir="$1"
+    local mm_arch mm_fname mm_ver mm_url tmp_tgz tmp_dir extracted installed_bin installed_ver
+    mm_arch=$(mtg_multi_arch)
+    mm_fname=$(mtg_panel_arch)
+    [[ -z "$mm_arch" || -z "$mm_fname" ]] && return 1
+    installed_bin="$target_bin_dir/mtg-multi-linux-${mm_fname}"
+
+    # The user opted for "always latest": resolve the newest release tag and, if a
+    # binary is already installed, upgrade it only when it is out of date.
+    mm_ver=$(${curl_bin:-curl} -4 -Ls "https://api.github.com/repos/dolonet/mtg-multi/releases/latest" 2>/dev/null \
+        | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -n1)
+    if [[ -f "$installed_bin" ]]; then
+        chmod +x "$installed_bin" >/dev/null 2>&1
+        # Can't resolve the latest version (e.g. API rate limit) — keep what we have.
+        [[ -z "$mm_ver" ]] && return 0
+        installed_ver=$("$installed_bin" --version 2>/dev/null | awk '{print $1}')
+        if [[ "$installed_ver" == "$mm_ver" ]]; then
+            return 0
+        fi
+        echo -e "${green}Updating mtg-multi ${installed_ver:-unknown} -> ${mm_ver}...${plain}"
+    fi
+    [[ -z "$mm_ver" ]] && return 1
+    mm_url="https://github.com/dolonet/mtg-multi/releases/download/v${mm_ver}/mtg-multi-${mm_ver}-linux-${mm_arch}.tar.gz"
+    echo -e "${green}Downloading mtg-multi (multi-user MTProto)...${plain}"
+    tmp_tgz="/tmp/mtgmulti.$$.tar.gz"
+    tmp_dir="/tmp/mtgmulti.$$.d"
+    if ! ${curl_bin:-curl} -4fLRo "$tmp_tgz" "$mm_url" >/dev/null 2>&1; then
+        rm -f "$tmp_tgz" >/dev/null 2>&1
+        return 1
+    fi
+    mkdir -p "$tmp_dir" "$target_bin_dir" >/dev/null 2>&1
+    if tar -xzf "$tmp_tgz" -C "$tmp_dir" >/dev/null 2>&1; then
+        extracted=$(find "$tmp_dir" -type f -name mtg-multi 2>/dev/null | head -n1)
+        if [[ -n "$extracted" ]]; then
+            mv -f "$extracted" "$target_bin_dir/mtg-multi-linux-${mm_fname}" >/dev/null 2>&1
+            chmod +x "$target_bin_dir/mtg-multi-linux-${mm_fname}" >/dev/null 2>&1
+            rm -f "$target_bin_dir/mtg-linux-${mm_fname}" >/dev/null 2>&1
+            echo -e "${green}mtg-multi installed (multi-user MTProto).${plain}"
+            rm -rf "$tmp_tgz" "$tmp_dir" >/dev/null 2>&1
+            return 0
+        fi
+    fi
+    rm -rf "$tmp_tgz" "$tmp_dir" >/dev/null 2>&1
+    return 1
+}
+
+install_mtg() {
+    local target_bin_dir="$1"
+    local mtg_arch mtg_fname mtg_url tmp_tgz tmp_dir extracted
+    # Prefer the multi-user mtg-multi fork where a prebuilt binary exists.
+    if install_mtg_multi "$target_bin_dir"; then
+        return 0
+    fi
+    mtg_arch=$(mtg_release_arch)
+    mtg_fname=$(mtg_panel_arch)
+    if [[ -z "$mtg_arch" || -z "$mtg_fname" ]]; then
+        return 0
+    fi
+    if [[ -f "$target_bin_dir/mtg-linux-${mtg_fname}" ]]; then
+        chmod +x "$target_bin_dir/mtg-linux-${mtg_fname}" >/dev/null 2>&1
+        return 0
+    fi
+    mtg_url="https://github.com/9seconds/mtg/releases/download/v${MTG_VER}/mtg-${MTG_VER}-linux-${mtg_arch}.tar.gz"
+    echo -e "${green}Downloading mtg (MTProto sidecar)...${plain}"
+    tmp_tgz="/tmp/mtg.$$.tar.gz"
+    tmp_dir="/tmp/mtg.$$.d"
+    if ! ${curl_bin:-curl} -4fLRo "$tmp_tgz" "$mtg_url" >/dev/null 2>&1; then
+        rm -f "$tmp_tgz" >/dev/null 2>&1
+        echo -e "${yellow}Could not download mtg — MTProto proxies will be unavailable.${plain}"
+        return 0
+    fi
+    mkdir -p "$tmp_dir" "$target_bin_dir" >/dev/null 2>&1
+    if tar -xzf "$tmp_tgz" -C "$tmp_dir" >/dev/null 2>&1; then
+        extracted=$(find "$tmp_dir" -type f -name mtg 2>/dev/null | head -n1)
+        if [[ -n "$extracted" ]]; then
+            mv -f "$extracted" "$target_bin_dir/mtg-linux-${mtg_fname}" >/dev/null 2>&1
+            chmod +x "$target_bin_dir/mtg-linux-${mtg_fname}" >/dev/null 2>&1
+            echo -e "${green}mtg installed as bin/mtg-linux-${mtg_fname}.${plain}"
+        fi
+    fi
+    rm -rf "$tmp_tgz" "$tmp_dir" >/dev/null 2>&1
+    return 0
 }
 
 # Downloads xray binary + geo data files into the given target directory.
@@ -1158,6 +1291,9 @@ update_x-ui() {
                     chmod +x "bin/${xray_backup_name}" >/dev/null 2>&1
                 rm -f "$xray_backup" >/dev/null 2>&1
             fi
+            # Ensure the mtg MTProto sidecar is present (the local-source build
+            # only fetches xray). No-op if already installed; non-fatal.
+            install_mtg "${xui_folder}/bin"
 
             cp -f "${xui_folder}/x-ui.sh" /usr/bin/x-ui >/dev/null 2>&1
             chmod +x ${xui_folder}/x-ui.sh >/dev/null 2>&1
@@ -1271,10 +1407,15 @@ update_x-ui() {
     if [[ $(arch) == "armv5" || $(arch) == "armv6" || $(arch) == "armv7" ]]; then
         mv bin/xray-linux-$(arch) bin/xray-linux-arm >/dev/null 2>&1
         chmod +x bin/xray-linux-arm >/dev/null 2>&1
+        mv bin/mtg-linux-$(arch) bin/mtg-linux-arm >/dev/null 2>&1
+        chmod +x bin/mtg-linux-arm >/dev/null 2>&1
     fi
-    
+
     chmod +x x-ui >/dev/null 2>&1
     [ -f bin/xray-linux-$(arch) ] && chmod +x bin/xray-linux-$(arch) >/dev/null 2>&1
+    # Ensure the mtg MTProto sidecar is present (covers updates from a tarball
+    # that predates MTProto support). No-op if already shipped; non-fatal.
+    install_mtg "bin"
     if [[ -n "$xray_backup" && -n "$xray_backup_name" && -f "$xray_backup" ]]; then
         cp -f "$xray_backup" "bin/${xray_backup_name}" >/dev/null 2>&1
         if [[ $? -eq 0 ]]; then

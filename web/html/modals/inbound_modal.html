@@ -13,7 +13,7 @@
     cancel-text='{{ i18n "close" }}'
     :ok-button-props="{ props: { disabled: (!inModal.isEdit && inbound.protocol === Protocols.AMNEZIAWG && app.dbInbounds && app.dbInbounds.some(db => db.protocol === Protocols.AMNEZIAWG)) || (!inModal.isEdit && inbound.protocol === Protocols.NATIVEWG && app.dbInbounds && app.dbInbounds.some(db => db.protocol === Protocols.NATIVEWG)) } }"
 >
-    {{template "form/inbound"}}
+    {{template "form/inbound" .}}
 </a-modal>
 <script>
     // Make inModal globally available to ensure it works with any base path
@@ -26,7 +26,26 @@
         confirm: null,
         inbound: new Inbound(),
         dbInbound: new DBInbound(),
-        ok() {
+        async ok() {
+            // Auto-generate the Reality keypair if the user picked Reality but
+            // never clicked "Get New Cert": an empty privateKey makes Xray refuse
+            // to start and takes every inbound down with it. Covers create + edit.
+            const inb = inModal.inbound;
+            if (
+                inb &&
+                inb.stream &&
+                inb.stream.security === "reality" &&
+                inb.stream.reality &&
+                !inb.stream.reality.privateKey
+            ) {
+                await inboundModalVueInstance.getNewX25519Cert();
+                if (!inb.stream.reality.privateKey) {
+                    app.$message.error(
+                        '{{ i18n "pages.inbounds.toasts.realityKeyError" }}',
+                    );
+                    return;
+                }
+            }
             ObjectUtil.execute(
                 inModal.confirm,
                 inModal.inbound,
@@ -241,6 +260,9 @@
                         client.flow = "";
                     });
                 }
+                if (inModal.inbound.stream.network != "kcp") {
+                    inModal.inbound.stream.finalmask.udp = [];
+                }
             },
             SSMethodChange() {
                 this.inModal.inbound.settings.password =
@@ -333,6 +355,14 @@
                     this.inbound.stream.reality.serverNames = randomTarget.sni;
                 }
             },
+            // Pick a fresh FakeTLS fronting domain for MTProto from the same
+            // curated SNI list used by VLESS Reality.
+            randomizeMtprotoDomain() {
+                if (typeof getRandomRealityTarget !== "undefined") {
+                    this.inbound.settings.fakeTlsDomain =
+                        getRandomRealityTarget().sni;
+                }
+            },
             async getNewEchCert() {
                 inModal.loading(true);
                 const msg = await HttpUtil.post(
@@ -353,6 +383,12 @@
                 this.inbound.stream.tls.settings.echConfigList = "";
             },
             async getNewVlessEnc() {
+                const selected = inModal.inbound.settings.selectedAuth;
+                if (!selected) {
+                    this.clearVlessEnc();
+                    return;
+                }
+
                 inModal.loading(true);
                 const msg = await HttpUtil.get(
                     "/panel/api/server/getNewVlessEnc",
@@ -364,7 +400,6 @@
                 }
 
                 const auths = msg.obj.auths || [];
-                const selected = inModal.inbound.settings.selectedAuth;
                 const block = auths.find((a) => a.label === selected);
 
                 if (!block) {

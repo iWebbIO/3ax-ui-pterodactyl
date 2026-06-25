@@ -165,12 +165,74 @@ func IsAwgInstalled() bool {
 	return err1 == nil && err2 == nil
 }
 
-// GetAwgVersion returns the version string from `awg --version`.
+// awg20ReleaseDate is the build date (YYYYMMDD) from which AmneziaWG speaks 2.0
+// (S3/S4 padding, ranged H1-H4, I1-I5 signature packets). AmneziaWG 2.0 shipped
+// 2025-09-01, so a kernel module built on/after that date is 2.0-capable.
+const awg20ReleaseDate = 20250901
+
+// GetAwgVersion returns a human-meaningful AmneziaWG version for display.
+//
+// The amneziawg-tools binary cosmetically reports the inherited wireguard-tools
+// base version via `awg --version` (e.g. "v1.0.20210914") and never bumps it
+// (upstream amneziawg-tools issue #21), which misleads users into thinking the
+// install is ancient. The meaningful version is the kernel module's, exposed at
+// /sys/module/amneziawg/version (e.g. "1.0.20251009"); we derive the protocol
+// generation from its build date and report "2.0.<date>" / "1.x.<date>".
 func GetAwgVersion() string {
-	cmd := exec.Command("awg", "--version")
-	output, err := cmd.Output()
+	if mod := awgModuleVersion(); mod != "" {
+		switch date := awgVersionDate(mod); {
+		case date >= awg20ReleaseDate:
+			return fmt.Sprintf("v2.0.%d", date)
+		case date > 0:
+			return fmt.Sprintf("v1.x.%d", date)
+		default:
+			return withVPrefix(mod)
+		}
+	}
+	// Fallback: the (cosmetic) tools version string — only when the module
+	// version can't be read (e.g. module not loaded yet).
+	output, err := exec.Command("awg", "--version").Output()
 	if err != nil {
 		return "unknown"
 	}
-	return strings.TrimSpace(string(output))
+	return withVPrefix(strings.TrimSpace(string(output)))
+}
+
+// withVPrefix prefixes a version string with "v" for display, unless it already
+// has one or is empty.
+func withVPrefix(v string) string {
+	if v == "" || strings.HasPrefix(v, "v") || strings.HasPrefix(v, "V") {
+		return v
+	}
+	return "v" + v
+}
+
+// awgModuleVersion returns the AmneziaWG kernel module version (e.g. "1.0.20251009"),
+// preferring the loaded module's sysfs entry and falling back to modinfo.
+func awgModuleVersion() string {
+	if b, err := os.ReadFile("/sys/module/amneziawg/version"); err == nil {
+		if v := strings.TrimSpace(string(b)); v != "" {
+			return v
+		}
+	}
+	if out, err := exec.Command("modinfo", "-F", "version", "amneziawg").Output(); err == nil {
+		return strings.TrimSpace(string(out))
+	}
+	return ""
+}
+
+// awgVersionDate extracts the YYYYMMDD build date from a version string such as
+// "1.0.20251009" (the amneziawg/wireguard-tools versioning scheme). Returns 0
+// when no plausible date is present.
+func awgVersionDate(v string) int {
+	for i := 0; i+8 <= len(v); i++ {
+		seg := v[i : i+8]
+		if seg[0] != '2' || seg[1] != '0' {
+			continue
+		}
+		if n, err := strconv.Atoi(seg); err == nil {
+			return n
+		}
+	}
+	return 0
 }

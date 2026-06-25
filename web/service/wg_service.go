@@ -163,7 +163,8 @@ func (s *WgService) ResetToDefaults() (*model.WgServer, error) {
 	server.IPv4Pool = "10.77.77.0/24"
 	// Preserve: IPv6Enabled, IPv6Address, IPv6Pool, IPv6Gateway,
 	//           ExternalInterface, IPv6ExternalInterface, Endpoint
-	server.DNS = "1.1.1.1,2606:4700:4700::1111"
+	server.DnsIpv4 = "1.1.1.1"
+	server.DnsIpv6 = "2606:4700:4700::1111"
 	server.PostUp = ""
 	server.PostDown = ""
 	server.TrafficReset = "never"
@@ -643,23 +644,29 @@ func (s *WgService) UpdateTrafficStats() {
 				continue
 			}
 
+			// Accumulate the delta against the last seen raw counter so Upload/
+			// Download are lifetime totals that survive an interface bounce (a drop
+			// below the baseline means the kernel counter reset → the new value is
+			// itself the delta).
 			newUp := peer.TransferTx
 			newDown := peer.TransferRx
 
 			updates := map[string]any{}
 
-			if newUp != client.Upload || newDown != client.Download {
-				allTimeDelta := int64(0)
-				if newUp > client.Upload {
-					allTimeDelta += newUp - client.Upload
+			if newUp != client.LastPeerUp || newDown != client.LastPeerDown {
+				deltaUp := newUp - client.LastPeerUp
+				if deltaUp < 0 {
+					deltaUp = newUp
 				}
-				if newDown > client.Download {
-					allTimeDelta += newDown - client.Download
+				deltaDown := newDown - client.LastPeerDown
+				if deltaDown < 0 {
+					deltaDown = newDown
 				}
-
-				updates["upload"] = newUp
-				updates["download"] = newDown
-				updates["all_time"] = client.AllTime + allTimeDelta
+				updates["upload"] = client.Upload + deltaUp
+				updates["download"] = client.Download + deltaDown
+				updates["all_time"] = client.AllTime + deltaUp + deltaDown
+				updates["last_peer_up"] = newUp
+				updates["last_peer_down"] = newDown
 			}
 
 			if peer.LatestHandshake > 0 {
@@ -802,6 +809,23 @@ func (s *WgService) ResetAllClientTraffics() error {
 	if server.Enable {
 		if err := s.applyServerConfig(server); err != nil {
 			logger.Warning("Failed to apply WG config after traffic reset:", err)
+		}
+	}
+	return nil
+}
+
+// DelDepletedClients deletes non-renewing (reset = 0) WG clients that are over
+// their traffic quota or past their expiry, then reapplies the server config.
+func (s *WgService) DelDepletedClients() error {
+	db := database.GetDB()
+	now := time.Now().UnixMilli()
+	var depleted []model.WgClient
+	if err := db.Where("reset = 0 AND ((total_gb > 0 AND upload + download >= total_gb) OR (expiry_time > 0 AND expiry_time <= ?))", now).Find(&depleted).Error; err != nil {
+		return err
+	}
+	for _, c := range depleted {
+		if err := s.DeleteClient(c.Id); err != nil {
+			logger.Warning("WG DelDepletedClients: delete", c.Email, "failed:", err)
 		}
 	}
 	return nil

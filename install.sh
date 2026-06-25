@@ -1310,7 +1310,7 @@ print(str(first) + '/' + str(net.prefixlen))
         ipv4_address, ipv4_pool,
         ipv6_enabled, ipv6_address, ipv6_pool, ipv6_gateway,
         jc, jmin, jmax, s1, s2, h1, h2, h3, h4,
-        dns, external_interface, ipv6_external_interface,
+        dns_ipv4, dns_ipv6, external_interface, ipv6_external_interface,
         post_up, post_down, endpoint,
         created_at, updated_at
     ) VALUES (
@@ -1319,13 +1319,16 @@ print(str(first) + '/' + str(net.prefixlen))
         '10.66.66.1/24', '10.66.66.0/24',
         ${ipv6_enabled}, '${awg_server_ipv6:-}', '${ipv6_prefix:-}', '${ipv6_gateway:-}',
         4, 50, 1000, 0, 0, 1, 2, 3, 4,
-        '1.1.1.1,2606:4700:4700::1111', '${ipv4_iface}', '${ipv6_iface}',
+        '1.1.1.1', '2606:4700:4700::1111', '${ipv4_iface}', '${ipv6_iface}',
         '', '', '${endpoint}',
         ${now_ms}, ${now_ms}
     );" 2>/dev/null
 
     if [[ $? -eq 0 ]]; then
         echo -e "${green}AmneziaWG configured successfully!${plain}"
+        # Fresh install only (this whole block is skipped when a server already
+        # exists), so default new setups to AmneziaWG 2.0 obfuscation.
+        ${xui_folder}/x-ui awg-gen2 >/dev/null 2>&1 && echo -e "${green}  AmneziaWG 2.0 obfuscation parameters generated.${plain}"
         echo -e ""
         echo -e "${green}═══════════════════════════════════════════${plain}"
         echo -e "  Interface:    awg0"
@@ -1530,7 +1533,7 @@ print(str(first) + '/' + str(net.prefixlen))
         private_key, public_key,
         ipv4_address, ipv4_pool,
         ipv6_enabled, ipv6_address, ipv6_pool, ipv6_gateway,
-        dns, external_interface, ipv6_external_interface,
+        dns_ipv4, dns_ipv6, external_interface, ipv6_external_interface,
         post_up, post_down, endpoint,
         created_at, updated_at
     ) VALUES (
@@ -1538,7 +1541,7 @@ print(str(first) + '/' + str(net.prefixlen))
         '${server_privkey}', '${server_pubkey}',
         '10.77.77.1/24', '10.77.77.0/24',
         ${ipv6_enabled}, '${wg_server_ipv6:-}', '${ipv6_prefix:-}', '${ipv6_gateway:-}',
-        '1.1.1.1,2606:4700:4700::1111', '${ipv4_iface}', '${ipv6_iface}',
+        '1.1.1.1', '2606:4700:4700::1111', '${ipv4_iface}', '${ipv6_iface}',
         '', '', '${endpoint}',
         ${now_ms}, ${now_ms}
     );" 2>/dev/null
@@ -1594,6 +1597,148 @@ xray_panel_arch() {
         s390x) echo "s390x" ;;
         *) echo "" ;;
     esac
+}
+
+# Pinned mtg (MTProto FakeTLS sidecar, github.com/9seconds/mtg) version.
+MTG_VER="2.2.8"
+
+# Translates the panel's arch label to mtg's release-asset arch
+# (mtg-${MTG_VER}-linux-{ARCH}.tar.gz). Empty when 9seconds/mtg ships no
+# compatible binary for this arch (s390x has none; armv5 falls back to the
+# armv6 build, which true ARMv5 hardware may not run — that hardware is
+# effectively extinct, so this is a deliberate best-effort).
+mtg_release_arch() {
+    case "$(arch)" in
+        amd64) echo "amd64" ;;
+        386) echo "386" ;;
+        arm64) echo "arm64" ;;
+        armv7) echo "armv7" ;;
+        armv6|armv5) echo "armv6" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Translates the panel's arch label to the filename Go's mtproto package looks
+# up at runtime: bin/mtg-linux-{FNAME} where FNAME == runtime.GOARCH (so all
+# 32-bit arm variants collapse to "arm", matching xray_panel_arch).
+mtg_panel_arch() {
+    case "$(arch)" in
+        amd64) echo "amd64" ;;
+        386) echo "386" ;;
+        arm64) echo "arm64" ;;
+        armv7|armv6|armv5) echo "arm" ;;
+        *) echo "" ;;
+    esac
+}
+
+# mtg-multi (dolonet/mtg-multi) is the multi-user fork — many client secrets on
+# one port. It ships prebuilt only for linux amd64/arm64; other arches fall back
+# to single-secret mtg. Empty when no mtg-multi binary exists for this arch.
+mtg_multi_arch() {
+    case "$(arch)" in
+        amd64) echo "amd64" ;;
+        arm64) echo "arm64" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Installs mtg-multi (latest release) as bin/mtg-multi-linux-{FNAME}. Returns 0
+# on success, 1 otherwise (caller then falls back to single-secret mtg).
+install_mtg_multi() {
+    local target_bin_dir="$1"
+    local mm_arch mm_fname mm_ver mm_url tmp_tgz tmp_dir extracted installed_bin installed_ver
+    mm_arch=$(mtg_multi_arch)
+    mm_fname=$(mtg_panel_arch)
+    [[ -z "$mm_arch" || -z "$mm_fname" ]] && return 1
+    installed_bin="$target_bin_dir/mtg-multi-linux-${mm_fname}"
+    # Resolve the latest mtg-multi tag (the user opted for "always latest").
+    mm_ver=$(curl -4 -Ls "https://api.github.com/repos/dolonet/mtg-multi/releases/latest" 2>/dev/null \
+        | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -n1)
+    if [[ -f "$installed_bin" ]]; then
+        chmod +x "$installed_bin"
+        # Keep the existing binary if we can't resolve the latest or it's current.
+        [[ -z "$mm_ver" ]] && return 0
+        installed_ver=$("$installed_bin" --version 2>/dev/null | awk '{print $1}')
+        [[ "$installed_ver" == "$mm_ver" ]] && return 0
+        echo -e "${green}Updating mtg-multi ${installed_ver:-unknown} -> ${mm_ver}...${plain}"
+    fi
+    [[ -z "$mm_ver" ]] && return 1
+    mm_url="https://github.com/dolonet/mtg-multi/releases/download/v${mm_ver}/mtg-multi-${mm_ver}-linux-${mm_arch}.tar.gz"
+    echo -e "${green}Downloading mtg-multi (multi-user MTProto) ${mm_url}...${plain}"
+    tmp_tgz="/tmp/mtgmulti.$$.tar.gz"
+    tmp_dir="/tmp/mtgmulti.$$.d"
+    if ! curl -4fLRo "$tmp_tgz" "$mm_url"; then
+        rm -f "$tmp_tgz"
+        return 1
+    fi
+    mkdir -p "$tmp_dir" "$target_bin_dir"
+    if tar -xzf "$tmp_tgz" -C "$tmp_dir" 2>/dev/null; then
+        extracted=$(find "$tmp_dir" -type f -name mtg-multi 2>/dev/null | head -n1)
+        if [[ -n "$extracted" ]]; then
+            mv -f "$extracted" "$target_bin_dir/mtg-multi-linux-${mm_fname}"
+            chmod +x "$target_bin_dir/mtg-multi-linux-${mm_fname}"
+            # A leftover single-secret mtg would be ignored (mtg-multi is preferred)
+            # but remove it to keep detection unambiguous.
+            rm -f "$target_bin_dir/mtg-linux-${mm_fname}" 2>/dev/null
+            echo -e "${green}  mtg-multi installed as bin/mtg-multi-linux-${mm_fname} (multi-user MTProto).${plain}"
+            rm -rf "$tmp_tgz" "$tmp_dir"
+            return 0
+        fi
+    fi
+    rm -rf "$tmp_tgz" "$tmp_dir"
+    return 1
+}
+
+# Installs the MTProto sidecar into the given bin dir: prefer the multi-user
+# mtg-multi fork (amd64/arm64), else single-secret mtg. The panel detects which
+# binary is present and adapts. Fully non-fatal: any failure prints a notice and
+# returns 0 so the install proceeds (MTProto inbounds simply won't start).
+install_mtg() {
+    local target_bin_dir="$1"
+    local mtg_arch mtg_fname mtg_url tmp_tgz tmp_dir extracted
+    # Prefer multi-user mtg-multi where it ships a prebuilt binary.
+    if install_mtg_multi "$target_bin_dir"; then
+        return 0
+    fi
+    mtg_arch=$(mtg_release_arch)
+    mtg_fname=$(mtg_panel_arch)
+    if [[ -z "$mtg_arch" || -z "$mtg_fname" ]]; then
+        echo -e "${yellow}No prebuilt mtg (MTProto) binary for arch $(arch) — MTProto proxies will be unavailable.${plain}"
+        return 0
+    fi
+    # Already present (e.g. shipped in the release tarball) — just ensure +x.
+    if [[ -f "$target_bin_dir/mtg-linux-${mtg_fname}" ]]; then
+        chmod +x "$target_bin_dir/mtg-linux-${mtg_fname}"
+        return 0
+    fi
+    mtg_url="https://github.com/9seconds/mtg/releases/download/v${MTG_VER}/mtg-${MTG_VER}-linux-${mtg_arch}.tar.gz"
+    if ! check_url_or_skip "$mtg_url" "mtg (MTProto sidecar)"; then
+        echo -e "${yellow}Skipping mtg — MTProto proxies will be unavailable.${plain}"
+        return 0
+    fi
+    echo -e "${green}Downloading mtg (MTProto sidecar) ${mtg_url}...${plain}"
+    tmp_tgz="/tmp/mtg.$$.tar.gz"
+    tmp_dir="/tmp/mtg.$$.d"
+    if ! curl -4fLRo "$tmp_tgz" "$mtg_url"; then
+        rm -f "$tmp_tgz"
+        echo -e "${yellow}Failed to download mtg — MTProto proxies will be unavailable.${plain}"
+        return 0
+    fi
+    mkdir -p "$tmp_dir" "$target_bin_dir"
+    if tar -xzf "$tmp_tgz" -C "$tmp_dir" 2>/dev/null; then
+        extracted=$(find "$tmp_dir" -type f -name mtg 2>/dev/null | head -n1)
+        if [[ -n "$extracted" ]]; then
+            mv -f "$extracted" "$target_bin_dir/mtg-linux-${mtg_fname}"
+            chmod +x "$target_bin_dir/mtg-linux-${mtg_fname}"
+            echo -e "${green}  mtg installed as bin/mtg-linux-${mtg_fname}.${plain}"
+        else
+            echo -e "${yellow}mtg archive had no mtg binary — MTProto proxies will be unavailable.${plain}"
+        fi
+    else
+        echo -e "${yellow}Failed to extract mtg — MTProto proxies will be unavailable.${plain}"
+    fi
+    rm -rf "$tmp_tgz" "$tmp_dir"
+    return 0
 }
 
 # Downloads xray binary + geo data files into the given target directory.
@@ -1836,14 +1981,21 @@ install_x-ui_finalize() {
     chmod +x x-ui
     [ -f x-ui.sh ] && chmod +x x-ui.sh
 
-    # Rename the bundled xray binary for arm variants — the panel always loads
-    # bin/xray-linux-arm regardless of the specific arm version.
+    # Rename the bundled xray/mtg binaries for arm variants — the panel always
+    # loads bin/{xray,mtg}-linux-arm regardless of the specific arm version.
     if [[ $(arch) == "armv5" || $(arch) == "armv6" || $(arch) == "armv7" ]]; then
         [ -f bin/xray-linux-$(arch) ] && mv bin/xray-linux-$(arch) bin/xray-linux-arm
         [ -f bin/xray-linux-arm ] && chmod +x bin/xray-linux-arm
+        [ -f bin/mtg-linux-$(arch) ] && mv bin/mtg-linux-$(arch) bin/mtg-linux-arm
+        [ -f bin/mtg-linux-arm ] && chmod +x bin/mtg-linux-arm
     fi
     chmod +x x-ui
     [ -f bin/xray-linux-$(arch) ] && chmod +x bin/xray-linux-$(arch)
+
+    # Ensure the mtg MTProto sidecar is present. No-op when already shipped in
+    # the release tarball; downloads it otherwise (e.g. older tarball, or the
+    # local-source build path which only fetches xray). Never fatal.
+    install_mtg "bin"
 
     mv -f /usr/bin/x-ui-temp /usr/bin/x-ui
     chmod +x /usr/bin/x-ui
@@ -2106,7 +2258,41 @@ prompt_debug_mode() {
     esac
 }
 
+check_existing_install() {
+    # If 3AX-UI is already installed, offer to update instead of reinstalling
+    # over the top (running the installer again otherwise stops the panel and
+    # overwrites the binary). Default (Enter) switches to the update script.
+    if [[ -f /usr/bin/x-ui || -f "${xui_folder}/x-ui" ]]; then
+        echo -e "${yellow}3AX-UI is already installed on this system.${plain}"
+        echo -e "Running the installer again stops the panel and overwrites the binary."
+        echo -e "  ${green}1)${plain} Update to the latest version (update.sh) — recommended"
+        echo -e "  ${green}2)${plain} Reinstall over the existing installation"
+        echo -e "  ${green}3)${plain} Cancel"
+        echo -ne "Choose [1-3, default 1]: "
+        read -r __install_choice
+        case "${__install_choice:-1}" in
+            2)
+                echo -e "${yellow}Proceeding with reinstall over the existing installation.${plain}"
+                ;;
+            3)
+                echo -e "${yellow}Cancelled.${plain}"
+                exit 0
+                ;;
+            *)
+                echo -e "${green}Switching to the update script...${plain}"
+                if is_local_source_install && [[ -f ./update.sh ]]; then
+                    bash ./update.sh
+                else
+                    bash <(curl -Ls "https://raw.githubusercontent.com/coinman-dev/3ax-ui/${REPO_BRANCH:-main}/update.sh")
+                fi
+                exit $?
+                ;;
+        esac
+    fi
+}
+
 echo -e "${green}Running...${plain}"
+check_existing_install
 prompt_debug_mode
 install_base
 install_amneziawg

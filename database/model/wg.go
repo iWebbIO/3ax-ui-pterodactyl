@@ -23,8 +23,10 @@ type WgServer struct {
 	IPv6Pool    string `json:"ipv6Pool"`    // pool for clients, e.g. "2a01:xxx::/112"
 	IPv6Gateway string `json:"ipv6Gateway"` // upstream gateway for NDP
 
-	// DNS pushed to clients
-	DNS string `json:"dns" gorm:"default:'1.1.1.1,2606:4700:4700::1111'"`
+	// DNS pushed to clients, split by family. Composed into one DNS line in the
+	// client config; the IPv6 entry is used only when IPv6 is enabled.
+	DnsIpv4 string `json:"dnsIpv4" gorm:"default:'1.1.1.1'"`
+	DnsIpv6 string `json:"dnsIpv6" gorm:"default:'2606:4700:4700::1111'"`
 
 	// External interface for NAT (IPv4)
 	ExternalInterface string `json:"externalInterface" gorm:"default:''"`
@@ -87,11 +89,19 @@ type WgClient struct {
 
 	PersistentKeepalive int `json:"persistentKeepalive" gorm:"default:25"`
 
-	// Traffic stats
+	// Traffic stats. Upload/Download accumulate as lifetime totals (resettable via
+	// reset-traffic) and AllTime is the absolute lifetime — same model as VLESS.
 	Upload   int64 `json:"upload" gorm:"default:0"`
 	Download int64 `json:"download" gorm:"default:0"`
 	TotalGB  int64 `json:"totalGB" gorm:"default:0"` // traffic limit in bytes (0 = unlimited)
 	AllTime  int64 `json:"allTime" gorm:"default:0"`
+
+	// Raw kernel per-peer transfer counters seen at the last poll. They are the
+	// baseline for computing lifetime deltas, so Upload/Download survive an
+	// interface bounce (the kernel resets per-peer counters to zero on bounce).
+	// Internal bookkeeping — not exposed via JSON.
+	LastPeerUp   int64 `json:"-" gorm:"default:0"`
+	LastPeerDown int64 `json:"-" gorm:"default:0"`
 
 	ExpiryTime int64 `json:"expiryTime" gorm:"default:0"` // 0 = never
 	Reset      int   `json:"reset" gorm:"default:0"`      // auto-renew interval in days, 0 = disabled

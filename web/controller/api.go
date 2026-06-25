@@ -16,13 +16,14 @@ type APIController struct {
 	serverController  *ServerController
 	awgController     *AwgController
 	wgController      *WgController
+	mtprotoController *MtprotoController
 	Tgbot             service.Tgbot
 }
 
 // NewAPIController creates a new APIController instance and initializes its routes.
-func NewAPIController(g *gin.RouterGroup) *APIController {
+func NewAPIController(g *gin.RouterGroup, customGeo *service.CustomGeoService) *APIController {
 	a := &APIController{}
-	a.initRouter(g)
+	a.initRouter(g, customGeo)
 	return a
 }
 
@@ -37,7 +38,7 @@ func (a *APIController) checkAPIAuth(c *gin.Context) {
 }
 
 // initRouter sets up the API routes for inbounds, server, and other endpoints.
-func (a *APIController) initRouter(g *gin.RouterGroup) {
+func (a *APIController) initRouter(g *gin.RouterGroup, customGeo *service.CustomGeoService) {
 	// Main API group
 	api := g.Group("/panel/api")
 	api.Use(a.checkAPIAuth)
@@ -57,6 +58,13 @@ func (a *APIController) initRouter(g *gin.RouterGroup) {
 	// WireGuard Native API
 	wgGroup := api.Group("/wg")
 	a.wgController = NewWgController(wgGroup)
+
+	// MTProto API
+	mtprotoGroup := api.Group("/mtproto")
+	a.mtprotoController = NewMtprotoController(mtprotoGroup)
+
+	// Custom Geo API
+	NewCustomGeoController(api.Group("/custom-geo"), customGeo)
 
 	// Extra routes
 	api.GET("/backuptotgbot", a.BackuptoTgbot)

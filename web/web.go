@@ -18,6 +18,7 @@ import (
 
 	"github.com/coinman-dev/3ax-ui/v2/config"
 	"github.com/coinman-dev/3ax-ui/v2/logger"
+	"github.com/coinman-dev/3ax-ui/v2/mtproto"
 	"github.com/coinman-dev/3ax-ui/v2/util/common"
 	"github.com/coinman-dev/3ax-ui/v2/web/controller"
 	"github.com/coinman-dev/3ax-ui/v2/web/job"
@@ -101,9 +102,10 @@ type Server struct {
 	api   *controller.APIController
 	ws    *controller.WebSocketController
 
-	xrayService    service.XrayService
-	settingService service.SettingService
-	tgbotService   service.Tgbot
+	xrayService      service.XrayService
+	settingService   service.SettingService
+	tgbotService     service.Tgbot
+	customGeoService *service.CustomGeoService
 
 	wsHub *websocket.Hub
 
@@ -205,14 +207,15 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 
 	store := cookie.NewStore(secret)
 	// Configure default session cookie options, including expiration (MaxAge)
-	if sessionMaxAge, err := s.settingService.GetSessionMaxAge(); err == nil {
-		store.Options(sessions.Options{
-			Path:     "/",
-			MaxAge:   sessionMaxAge * 60, // minutes -> seconds
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-		})
+	sessionOptions := sessions.Options{
+		Path:     basePath,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
 	}
+	if sessionMaxAge, err := s.settingService.GetSessionMaxAge(); err == nil && sessionMaxAge > 0 {
+		sessionOptions.MaxAge = sessionMaxAge * 60 // minutes -> seconds
+	}
+	store.Options(sessionOptions)
 	engine.Use(sessions.Sessions("3ax-ui", store))
 	engine.Use(func(c *gin.Context) {
 		c.Set("base_path", basePath)
@@ -268,7 +271,7 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 
 	s.index = controller.NewIndexController(g)
 	s.panel = controller.NewXUIController(g)
-	s.api = controller.NewAPIController(g)
+	s.api = controller.NewAPIController(g, s.customGeoService)
 
 	// Initialize WebSocket hub
 	s.wsHub = websocket.NewHub()
@@ -295,6 +298,7 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 // startTask schedules background jobs (Xray checks, traffic jobs, cron
 // jobs) which the panel relies on for periodic maintenance and monitoring.
 func (s *Server) startTask() {
+	s.customGeoService.EnsureOnStartup()
 	err := s.xrayService.RestartXray(true)
 	if err != nil {
 		logger.Warning("start xray failed:", err)
@@ -320,6 +324,8 @@ func (s *Server) startTask() {
 		s.cron.AddJob("@every 10s", job.NewAwgTrafficJob())
 		// WireGuard Native traffic stats every 10 seconds
 		s.cron.AddJob("@every 10s", job.NewWgTrafficJob())
+		// Reconcile mtproto (mtg) sidecars + scrape their traffic every 10 seconds
+		s.cron.AddJob("@every 10s", job.NewMtprotoJob())
 	}()
 
 	// check client ips from log file every 10 sec
@@ -329,6 +335,8 @@ func (s *Server) startTask() {
 	s.cron.AddJob("@daily", job.NewClearLogsJob())
 
 	// Inbound traffic reset jobs
+	// Run every hour
+	s.cron.AddJob("@hourly", job.NewPeriodicTrafficResetJob("hourly"))
 	// Run once a day, midnight
 	s.cron.AddJob("@daily", job.NewPeriodicTrafficResetJob("daily"))
 	// Run once a week, midnight between Sat/Sun
@@ -352,14 +360,17 @@ func (s *Server) startTask() {
 	isTgbotenabled, err := s.settingService.GetTgbotEnabled()
 	if (err == nil) && (isTgbotenabled) {
 		runtime, err := s.settingService.GetTgbotRuntime()
-		if err != nil || runtime == "" {
-			logger.Errorf("Add NewStatsNotifyJob error[%s], Runtime[%s] invalid, will run default", err, runtime)
+		if err != nil {
+			logger.Warningf("Add NewStatsNotifyJob: failed to load runtime: %v; using default @daily", err)
+			runtime = "@daily"
+		} else if strings.TrimSpace(runtime) == "" {
+			logger.Warning("Add NewStatsNotifyJob runtime is empty, using default @daily")
 			runtime = "@daily"
 		}
 		logger.Infof("Tg notify enabled,run at %s", runtime)
 		_, err = s.cron.AddJob(runtime, job.NewStatsNotifyJob())
 		if err != nil {
-			logger.Warning("Add NewStatsNotifyJob error", err)
+			logger.Warningf("Add NewStatsNotifyJob: failed to schedule runtime %q: %v", runtime, err)
 			return
 		}
 
@@ -395,6 +406,8 @@ func (s *Server) Start() (err error) {
 		cron.WithChain(cron.SkipIfStillRunning(cron.DiscardLogger)),
 	)
 	s.cron.Start()
+
+	s.customGeoService = service.NewCustomGeoService()
 
 	engine, err := s.initRouter()
 	if err != nil {
@@ -475,6 +488,8 @@ func (s *Server) Start() (err error) {
 func (s *Server) Stop() error {
 	s.cancel()
 	s.xrayService.StopXray()
+	// Stop every mtg MTProto sidecar we launched (they run outside Xray).
+	mtproto.GetManager().StopAll()
 	if s.cron != nil {
 		s.cron.Stop()
 	}

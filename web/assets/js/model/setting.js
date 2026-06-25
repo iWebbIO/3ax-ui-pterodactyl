@@ -38,9 +38,12 @@ class AllSetting {
         this.subPort = 2096;
         this.subPath = "";
         this.subJsonPath = "/json/";
+        this.subClashEnable = true;
+        this.subClashPath = "/clash/";
         this.subDomain = "";
         this.externalTrafficInformEnable = false;
         this.externalTrafficInformURI = "";
+        this.restartXrayOnClientDisable = true;
         this.subCertFile = "";
         this.subKeyFile = "";
         this.subUpdates = 12;
@@ -48,6 +51,7 @@ class AllSetting {
         this.subShowInfo = true;
         this.subURI = "";
         this.subJsonURI = "";
+        this.subClashURI = "";
         this.subJsonFragment = "";
         this.subJsonNoises = "";
         this.subJsonMux = "";
