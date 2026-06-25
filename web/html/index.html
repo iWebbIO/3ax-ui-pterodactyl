@@ -96,6 +96,12 @@
   .index-page.dark .protocol-switcher-state.is-missing {
     color: rgba(255, 255, 255, 0.45);
   }
+  /* Dashboard cards share one wrapping flex row; keep each row's cards equal
+     height so a taller card (e.g. when the "update available" tag wraps to a
+     second line) doesn't push neighbours into staircase gaps. */
+  .index-page .dashboard-cards > .ant-col > .ant-card {
+    height: 100%;
+  }
   @media (max-width: 768px) {
     .index-page .protocol-switcher {
       flex-direction: column;
@@ -137,8 +143,8 @@
                 <a-spin tip='{{ i18n "loading" }}'></a-spin>
               </a-card>
             </a-row>
-            <a-row :gutter="[isMobile ? 8 : 16, isMobile ? 0 : 12]" v-else>
-              <a-col>
+            <a-row type="flex" class="dashboard-cards" :gutter="[isMobile ? 8 : 16, isMobile ? 0 : 12]" v-else>
+              <a-col :span="24">
                 <a-card hoverable>
                   <a-row :gutter="[0, isMobile ? 16 : 0]">
                     <a-col :sm="24" :md="12">
