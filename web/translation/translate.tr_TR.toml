@@ -355,8 +355,22 @@
 "monthly" = "Aylık"
 "hourly" = "Saatlik"
 
+[pages.inbounds.mtproto]
+"hint" = "MTProto, Xray yerine harici bir mtg yardımcı süreci tarafından çalıştırılan bir Telegram proxy'sidir. Bir genel port ve bir cephe alan adı seçin; FakeTLS gizli anahtarı kaydetme sırasında oluşturulur ve tek bir Telegram bağlantısıyla paylaşılır."
+"fakeTlsDomain" = "FakeTLS Alan Adı"
+"fakeTlsDomainRandom" = "Rastgele bir cephe alan adı seç"
+"secret" = "Gizli Anahtar"
+"secretDesc" = "FakeTLS gizli anahtarı. Kaydetme sırasında otomatik oluşturulması için boş bırakın veya şimdi bir tane oluşturmak için simgeye tıklayın."
+"secretPlaceholder" = "kaydetme sırasında otomatik oluşturulur"
+"shareLink" = "Telegram Proxy Bağlantısı"
+"route" = "Xray üzerinden yönlendir"
+"routeDesc" = "Telegram'ı doğrudan dışarı çıkmak yerine çekirdeğin yönlendiricisi üzerinden bağlayın. Telegram bu sunucuda engellenmişse ve bir outbound zinciri üzerinden çıkış yapmak istiyorsanız bunu kullanın."
+"outboundTag" = "Outbound etiketi"
+"outboundTagDesc" = "Bu proxy'nin Telegram trafiğinin gönderileceği Xray outbound'unun (veya dengeleyicinin) etiketi — örneğin, Telegram'a erişilebilen bir sunucuya giden bir zincir. Varsayılan outbound'u kullanmak için boş bırakın."
+
 [pages.inbounds.toasts]
 "obtain" = "Elde Et"
+"realityKeyError" = "Reality anahtar çifti oluşturulamadı. Reality ayarlarında 'Get New Cert' düğmesine tıklayıp tekrar deneyin."
 "updateSuccess" = "Güncelleme başarılı oldu"
 "logCleanSuccess" = "Günlük temizlendi"
 "inboundsUpdateSuccess" = "Gelen bağlantılar başarıyla güncellendi"

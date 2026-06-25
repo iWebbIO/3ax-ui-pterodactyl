@@ -355,8 +355,22 @@
 "monthly" = "每月"
 "hourly" = "每小时"
 
+[pages.inbounds.mtproto]
+"hint" = "MTProto 是一个由外部 mtg 边车（而非 Xray）运行的 Telegram 代理。请选择一个公共端口和一个伪装域名；FakeTLS 密钥会在保存时生成，并通过一个 Telegram 链接共享。"
+"fakeTlsDomain" = "FakeTLS 域名"
+"fakeTlsDomainRandom" = "选择一个随机伪装域名"
+"secret" = "密钥"
+"secretDesc" = "FakeTLS 密钥。留空则在保存时自动生成，或点击图标立即生成一个。"
+"secretPlaceholder" = "保存时自动生成"
+"shareLink" = "Telegram 代理链接"
+"route" = "通过 Xray 路由"
+"routeDesc" = "通过核心的路由器拨号连接 Telegram，而不是直接出站。当此服务器上的 Telegram 被封锁，且您希望通过 outbound 链路出口时，请使用此选项。"
+"outboundTag" = "出站标签"
+"outboundTagDesc" = "用于发送此代理 Telegram 流量的 Xray outbound（或负载均衡器）的标签——例如指向某个可访问 Telegram 的服务器的链路。留空则使用默认 outbound。"
+
 [pages.inbounds.toasts]
 "obtain" = "获取"
+"realityKeyError" = "无法生成 Reality 密钥对。请在 Reality 设置中点击 “Get New Cert” 后重试。"
 "updateSuccess" = "更新成功"
 "logCleanSuccess" = "日志已清除"
 "inboundsUpdateSuccess" = "入站连接已成功更新"

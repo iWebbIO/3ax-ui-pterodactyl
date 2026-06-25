@@ -355,8 +355,22 @@
 "monthly" = "Bulanan"
 "hourly" = "Setiap jam"
 
+[pages.inbounds.mtproto]
+"hint" = "MTProto adalah proxy Telegram yang dijalankan oleh sidecar mtg eksternal (bukan Xray). Pilih port publik dan domain fronting; secret FakeTLS dibuat saat disimpan dan dibagikan dengan satu tautan Telegram."
+"fakeTlsDomain" = "Domain FakeTLS"
+"fakeTlsDomainRandom" = "Pilih domain fronting acak"
+"secret" = "Secret"
+"secretDesc" = "Secret FakeTLS. Biarkan kosong untuk dibuat otomatis saat disimpan, atau klik ikon untuk membuatnya sekarang."
+"secretPlaceholder" = "dibuat otomatis saat disimpan"
+"shareLink" = "Tautan Proxy Telegram"
+"route" = "Rutekan melalui Xray"
+"routeDesc" = "Hubungkan Telegram melalui router inti alih-alih keluar secara langsung. Gunakan ini ketika Telegram diblokir di server ini dan Anda ingin keluar melalui rantai outbound."
+"outboundTag" = "Tag outbound"
+"outboundTagDesc" = "Tag dari outbound Xray (atau balancer) untuk mengirim lalu lintas Telegram proxy ini — mis. rantai ke server tempat Telegram dapat diakses. Biarkan kosong untuk menggunakan outbound bawaan."
+
 [pages.inbounds.toasts]
 "obtain" = "Dapatkan"
+"realityKeyError" = "Tidak dapat membuat keypair Reality. Klik 'Get New Cert' di pengaturan Reality dan coba lagi."
 "updateSuccess" = "Pembaruan berhasil"
 "logCleanSuccess" = "Log telah dibersihkan"
 "inboundsUpdateSuccess" = "Inbound berhasil diperbarui"

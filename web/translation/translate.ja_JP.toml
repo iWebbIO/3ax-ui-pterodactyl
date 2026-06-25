@@ -355,8 +355,22 @@
 "monthly" = "毎月"
 "hourly" = "毎時"
 
+[pages.inbounds.mtproto]
+"hint" = "MTProto は、Xray ではなく外部の mtg サイドカーで動作する Telegram プロキシです。公開ポートとフロント用ドメインを選択してください。FakeTLS シークレットは保存時に生成され、1 つの Telegram リンクで共有されます。"
+"fakeTlsDomain" = "FakeTLS ドメイン"
+"fakeTlsDomainRandom" = "ランダムなフロント用ドメインを選択"
+"secret" = "シークレット"
+"secretDesc" = "FakeTLS シークレット。空のままにすると保存時に自動生成されます。今すぐ生成するにはアイコンをクリックしてください。"
+"secretPlaceholder" = "保存時に自動生成"
+"shareLink" = "Telegram プロキシリンク"
+"route" = "Xray を経由する"
+"routeDesc" = "直接送出せず、コアのルーターを経由して Telegram に接続します。このサーバーで Telegram がブロックされていて、outbound チェーン経由で送出したい場合に使用します。"
+"outboundTag" = "Outbound タグ"
+"outboundTagDesc" = "このプロキシの Telegram トラフィックを送信する Xray の outbound（またはバランサー）のタグ。例えば Telegram に到達可能なサーバーへのチェーンなど。空のままにするとデフォルトの outbound が使用されます。"
+
 [pages.inbounds.toasts]
 "obtain" = "取得"
+"realityKeyError" = "Reality キーペアを生成できませんでした。Reality 設定で 'Get New Cert' をクリックして、もう一度お試しください。"
 "updateSuccess" = "更新が成功しました"
 "logCleanSuccess" = "ログがクリアされました"
 "inboundsUpdateSuccess" = "インバウンドが正常に更新されました"

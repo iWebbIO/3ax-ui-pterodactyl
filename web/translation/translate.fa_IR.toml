@@ -355,8 +355,22 @@
 "monthly" = "ماهانه"
 "hourly" = "هر ساعت"
 
+[pages.inbounds.mtproto]
+"hint" = "MTProto یک پروکسی Telegram است که توسط یک سرویس جانبی mtg خارجی اجرا می‌شود (نه Xray). یک پورت عمومی و یک دامنهٔ پوششی انتخاب کنید؛ راز FakeTLS هنگام ذخیره تولید شده و با یک لینک Telegram به اشتراک گذاشته می‌شود."
+"fakeTlsDomain" = "دامنهٔ FakeTLS"
+"fakeTlsDomainRandom" = "یک دامنهٔ پوششی تصادفی انتخاب کنید"
+"secret" = "راز"
+"secretDesc" = "راز FakeTLS. برای تولید خودکار هنگام ذخیره خالی بگذارید، یا روی آیکون کلیک کنید تا همین حالا یکی تولید شود."
+"secretPlaceholder" = "هنگام ذخیره به‌صورت خودکار تولید می‌شود"
+"shareLink" = "لینک پروکسی Telegram"
+"route" = "مسیریابی از طریق Xray"
+"routeDesc" = "به‌جای خروج مستقیم، Telegram را از طریق مسیریاب هسته فراخوانی کنید. زمانی از این گزینه استفاده کنید که Telegram روی این سرور مسدود است و می‌خواهید از طریق یک زنجیرهٔ outbound خروج داشته باشید."
+"outboundTag" = "برچسب outbound"
+"outboundTagDesc" = "برچسب outbound (یا متعادل‌کننده) Xray که ترافیک Telegram این پروکسی به آن ارسال می‌شود — برای مثال، زنجیره‌ای به سروری که Telegram در آن در دسترس است. برای استفاده از outbound پیش‌فرض خالی بگذارید."
+
 [pages.inbounds.toasts]
 "obtain" = "فراهم‌سازی"
+"realityKeyError" = "تولید جفت‌کلید Reality ممکن نشد. در تنظیمات Reality روی 'Get New Cert' کلیک کنید و دوباره تلاش کنید."
 "updateSuccess" = "بروزرسانی با موفقیت انجام شد"
 "logCleanSuccess" = "لاگ پاکسازی شد"
 "inboundsUpdateSuccess" = "ورودی‌ها با موفقیت به‌روزرسانی شدند"

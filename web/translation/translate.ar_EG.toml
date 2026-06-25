@@ -355,8 +355,22 @@
 "monthly" = "شهرياً"
 "hourly" = "كل ساعة"
 
+[pages.inbounds.mtproto]
+"hint" = "MTProto هو بروكسي Telegram يعمل عبر حاوية mtg خارجية مساعدة (وليس Xray). اختر منفذاً عاماً ونطاق تمويه؛ يتم توليد سر FakeTLS عند الحفظ ومشاركته عبر رابط Telegram واحد."
+"fakeTlsDomain" = "نطاق FakeTLS"
+"fakeTlsDomainRandom" = "اختر نطاق تمويه عشوائي"
+"secret" = "السر"
+"secretDesc" = "سر FakeTLS. اتركه فارغاً ليتم توليده تلقائياً عند الحفظ، أو انقر على الأيقونة لتوليد سر الآن."
+"secretPlaceholder" = "يُولَّد تلقائياً عند الحفظ"
+"shareLink" = "رابط بروكسي Telegram"
+"route" = "التوجيه عبر Xray"
+"routeDesc" = "اتصل بـ Telegram عبر موجّه النواة بدلاً من الخروج المباشر. استخدم هذا عندما يكون Telegram محجوباً على هذا الخادم وترغب في الخروج عبر سلسلة outbound."
+"outboundTag" = "وسم outbound"
+"outboundTagDesc" = "وسم outbound في Xray (أو الموازِن) الذي يُرسَل إليه حركة Telegram الخاصة بهذا البروكسي — مثل سلسلة إلى خادم يكون فيه Telegram متاحاً. اتركه فارغاً لاستخدام outbound الافتراضي."
+
 [pages.inbounds.toasts]
 "obtain" = "تم الحصول عليه"
+"realityKeyError" = "تعذّر توليد زوج مفاتيح Reality. انقر على 'Get New Cert' في إعدادات Reality وحاول مرة أخرى."
 "updateSuccess" = "تم التحديث بنجاح"
 "logCleanSuccess" = "تم مسح السجل"
 "inboundsUpdateSuccess" = "تم تحديث الواردات بنجاح"

@@ -360,8 +360,22 @@
 "weekly" = "Hàng tuần"
 "monthly" = "Hàng tháng"
 
+[pages.inbounds.mtproto]
+"hint" = "MTProto là một proxy Telegram được chạy bởi một sidecar mtg bên ngoài (không phải Xray). Chọn một cổng công khai và một tên miền ngụy trang; secret FakeTLS được tạo khi lưu và chia sẻ qua một liên kết Telegram."
+"fakeTlsDomain" = "Tên miền FakeTLS"
+"fakeTlsDomainRandom" = "Chọn một tên miền ngụy trang ngẫu nhiên"
+"secret" = "Secret"
+"secretDesc" = "Secret FakeTLS. Để trống để tự động tạo khi lưu, hoặc nhấp vào biểu tượng để tạo ngay bây giờ."
+"secretPlaceholder" = "tự động tạo khi lưu"
+"shareLink" = "Liên kết Proxy Telegram"
+"route" = "Định tuyến qua Xray"
+"routeDesc" = "Kết nối Telegram thông qua bộ định tuyến của lõi thay vì đi ra trực tiếp. Sử dụng tùy chọn này khi Telegram bị chặn trên máy chủ này và bạn muốn đi ra qua một chuỗi outbound."
+"outboundTag" = "Thẻ outbound"
+"outboundTagDesc" = "Thẻ của outbound Xray (hoặc balancer) để gửi lưu lượng Telegram của proxy này tới — ví dụ một chuỗi đến máy chủ nơi Telegram có thể truy cập được. Để trống để sử dụng outbound mặc định."
+
 [pages.inbounds.toasts]
 "obtain" = "Nhận"
+"realityKeyError" = "Không thể tạo cặp khóa Reality. Nhấp vào 'Get New Cert' trong cài đặt Reality và thử lại."
 "updateSuccess" = "Cập nhật thành công"
 "logCleanSuccess" = "Đã xóa nhật ký"
 "inboundsUpdateSuccess" = "Đã cập nhật thành công các kết nối inbound"
