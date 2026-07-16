@@ -71,9 +71,20 @@ func runWebServer() {
 		return
 	}
 
+	// Stable, greppable readiness marker on stdout. Process supervisors that
+	// watch console output (e.g. the Pterodactyl egg's startup detection) key
+	// on this line to know the panel is fully up.
+	if panelPort, portErr := (service.SettingService{}).GetPort(); portErr == nil {
+		log.Printf("3AX-UI online — panel listening on port %d", panelPort)
+	} else {
+		log.Println("3AX-UI online — panel listening")
+	}
+
 	sigCh := make(chan os.Signal, 1)
-	// Trap shutdown signals
-	signal.Notify(sigCh, syscall.SIGHUP, syscall.SIGTERM, sys.SIGUSR1)
+	// Trap shutdown signals. SIGINT is included so environments that stop the
+	// process with an interrupt (Ctrl+C / Pterodactyl's default "^C" stop) get
+	// the same graceful teardown as SIGTERM.
+	signal.Notify(sigCh, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, sys.SIGUSR1)
 	for {
 		sig := <-sigCh
 

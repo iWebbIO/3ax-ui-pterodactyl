@@ -1,0 +1,62 @@
+{
+  "_comment": "3AX-UI Pterodactyl egg. Runtime binaries are baked into the Docker image, so the install script only prepares the server volume. Allocate the panel port (primary) plus one high port per inbound you plan to run.",
+  "meta": {
+    "version": "PTDL_v2",
+    "update_url": null
+  },
+  "exported_at": "2026-07-16T00:00:00+00:00",
+  "name": "3AX-UI",
+  "author": "iomniksend@gmail.com",
+  "description": "3AX-UI proxy panel (Xray VLESS/VMess/Trojan/Shadowsocks/SOCKS/HTTP, MTProto, and userspace AmneziaWG/WireGuard) packaged for Pterodactyl. Runs fully unprivileged: no root, no TUN, no capabilities.",
+  "features": [],
+  "docker_images": {
+    "3AX-UI (latest)": "ghcr.io/coinman-dev/3ax-ui-pterodactyl:latest"
+  },
+  "file_denylist": [],
+  "startup": "/app/x-ui",
+  "config": {
+    "files": "{}",
+    "startup": "{\r\n    \"done\": \"3AX-UI online\"\r\n}",
+    "logs": "{}",
+    "stop": "^C"
+  },
+  "scripts": {
+    "installation": {
+      "script": "#!/bin/ash\n# 3AX-UI Pterodactyl install script.\n# Binaries are baked into the runtime image, so this only prepares the\n# writable server volume (mounted at /mnt/server during installation).\nset -e\nmkdir -p /mnt/server/db /mnt/server/log /mnt/server/bin /mnt/server/cert\necho '3AX-UI: server volume prepared.'\necho 'Panel + Xray + MTProto binaries ship inside the Docker image.'\necho 'Remember to allocate one extra port per inbound you intend to run.'\n",
+      "container": "alpine:3.20",
+      "entrypoint": "ash"
+    }
+  },
+  "variables": [
+    {
+      "name": "Panel port override",
+      "description": "Port the web panel listens on. Leave blank to use the server's primary allocation (recommended, so the panel is reachable at the server address). Only applied on first boot.",
+      "env_variable": "PANEL_PORT",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|integer|between:1025,65535",
+      "field_type": "text"
+    },
+    {
+      "name": "Initial admin username",
+      "description": "Admin username to seed on first boot. Leave blank to keep the panel default (admin). Only applied on first boot; change it later in the panel.",
+      "env_variable": "PANEL_USERNAME",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:64",
+      "field_type": "text"
+    },
+    {
+      "name": "Initial admin password",
+      "description": "Admin password to seed on first boot. Leave blank to keep the panel default (admin) — change it immediately after logging in. Only applied on first boot.",
+      "env_variable": "PANEL_PASSWORD",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:128",
+      "field_type": "text"
+    }
+  ]
+}
