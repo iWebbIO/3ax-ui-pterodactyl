@@ -7,253 +7,113 @@
   </picture>
 </p>
 
-[![Release](https://img.shields.io/github/v/release/coinman-dev/3ax-ui.svg)](https://github.com/coinman-dev/3ax-ui/releases)
-[![Build](https://img.shields.io/github/actions/workflow/status/coinman-dev/3ax-ui/release.yml.svg)](https://github.com/coinman-dev/3ax-ui/actions)
-[![GO Version](https://img.shields.io/github/go-mod/go-version/coinman-dev/3ax-ui.svg)](#)
-[![Downloads](https://img.shields.io/github/downloads/coinman-dev/3ax-ui/total.svg)](https://github.com/coinman-dev/3ax-ui/releases/latest)
+<p align="center"><b>3AX-UI for Pterodactyl</b> — the 3ax-ui proxy panel packaged as a <a href="https://pterodactyl.io">Pterodactyl</a> egg that runs <b>fully unprivileged</b>: no root, no <code>/dev/net/tun</code>, no extra capabilities.</p>
+
+[![Go Version](https://img.shields.io/github/go-mod/go-version/iWebbIO/3ax-ui-pterodactyl.svg)](#)
 [![License](https://img.shields.io/badge/license-GPL%20V3-blue.svg?longCache=true)](https://www.gnu.org/licenses/gpl-3.0.en.html)
-
-**3AX-UI** is a fork of [3x-ui](https://github.com/MHSanaei/3x-ui) with built-in censorship-circumvention protocols the original lacks: **AmneziaWG** (including 2.0), **native WireGuard** with native IPv6, and **MTProto** (a Telegram proxy).
-
-> The **A** in the name stands for **Amnezia** — the protocol this fork started with and still its key difference from the original.
 
 > [!IMPORTANT]
 > This project is intended for personal use only. Please do not use it for illegal purposes.
 
-## Quick Start
-
-```bash
-bash <(curl -Ls https://raw.githubusercontent.com/coinman-dev/3ax-ui/main/install.sh)
-```
-
-To install the latest pre-release version:
-
-```bash
-bash <(curl -Ls https://raw.githubusercontent.com/coinman-dev/3ax-ui/main/install.sh) --beta
-```
 ---
 
-## Why this panel?
+## What this is
 
-The original 3x-ui is built around the **Xray** core and supports VLESS, VMess, Trojan, Shadowsocks, and WireGuard. But the most useful DPI-circumvention tools today are missing from the original:
+This repository is a **downstream fork of [3ax-ui](https://github.com/coinman-dev/3ax-ui)** whose **sole purpose is to run the panel on Pterodactyl**. Game-panel containers are unprivileged — no root, only `/home/container` is writable, and ports come from allocations — so this fork specializes the panel for exactly that environment.
 
-- **AmneziaWG** — a modified WireGuard with traffic obfuscation (including the 2.0 generation);
-- **native WireGuard** that hands clients a real public IPv6 address without NAT66;
-- **MTProto** — a FakeTLS proxy for Telegram.
+Everything runs as a single supervised process inside a custom Docker image ("yolk") where all runtime binaries (the panel, Xray-core, geo data, `mtg`/`mtg-multi`) are **baked in**. The node downloads nothing at install time; it only prepares the server volume.
 
-**3AX-UI** integrates all three directly into the panel: they are created and managed exactly like any other protocol through the familiar **Inbounds** page.
+If you want a traditional VPS install (systemd, `install.sh`, kernel AmneziaWG), use the upstream project [coinman-dev/3ax-ui](https://github.com/coinman-dev/3ax-ui) instead — that path is inherited here but is **not** what this fork targets.
 
 ---
 
-## Key differences from 3x-ui
+## Protocol support on Pterodactyl
 
-### 1. Full AmneziaWG support (1.x and 2.0)
+| Protocol / feature | Status | Notes |
+|---|---|---|
+| Web panel + subscriptions | ✅ Available | Panel binds the server's primary allocation |
+| **VLESS, VMess, Trojan, Shadowsocks** | ✅ Available | Full Xray transports: TCP, WS, gRPC, HTTPUpgrade, XHTTP, mKCP, QUIC — plus **REALITY** and **XTLS** |
+| **SOCKS5 & HTTP** proxies | ✅ Available | Full per-user infrastructure (traffic, quota, expiry, IP limit) |
+| **MTProto** (Telegram FakeTLS) | ✅ Available | `mtg-multi` (multi-user) on amd64/arm64, single-secret `mtg` elsewhere |
+| **AmneziaWG** (1.x & 2.0) | 🚧 Phase 2 | Userspace netstack engine — obfuscation preserved, no root. See the plan below |
+| **native WireGuard** | 🚧 Phase 2 | Same userspace engine |
+| Native public IPv6 without NAT (NDP proxy) | ❌ Not on Pterodactyl | Needs `CAP_NET_ADMIN` + a routed prefix on the host; egress is NAT/routed instead |
+| Per-client iptables port forwarding | ❌ Not on Pterodactyl | Needs root/iptables in the container |
+| fail2ban | ❌ Disabled | Needs root/iptables |
 
-AmneziaWG is WireGuard with added packet obfuscation. Standard WireGuard is easily detected and blocked by DPI systems (Russia, Iran, China). AmneziaWG makes traffic indistinguishable from random noise.
-
-**What's added:**
-- Dedicated AWG server settings page (network parameters, IPv4/IPv6 address pool, obfuscation parameters)
-- AWG client management directly from the **Inbounds** page — just like VLESS or Trojan
-- Per-client: automatic key generation (private, public, preshared), IP allocation from pool, QR code, `.conf` file download
-- Traffic statistics collected every 10 seconds (upload/download per client)
-- Traffic limits, expiry dates, auto-renew, IP limit — same as all other protocols
-
-**AmneziaWG 2.0.** The panel supports the new 2.0-generation obfuscation set on top of classic 1.x:
-- extra parameters **S3 / S4** (padding for cookie/transport packets) and **I1** (a CPS signature packet before the handshake);
-- **H1–H4** now accept not just a single value but a range (`100000-800000`);
-- a **Generate** button fills the form with a random valid 2.0 set (*default* and *mobile* presets);
-- a **push configs** button sends every Telegram-linked client its config via the bot — so after switching to 2.0 they can re-import their profile in one tap;
-- DNS is pushed to clients split by family (IPv4 / IPv6).
-
-A fresh install configures the server in 2.0 mode right away; empty S3/S4/I1 keep classic 1.x output — backward compatibility is preserved.
-
-### 2. MTProto — Telegram proxy (FakeTLS)
-
-The new **MTProto** protocol is a FakeTLS proxy for Telegram, run as a standalone **mtg / mtg-multi** process (not Xray) and managed from the **Inbounds** page like any other protocol.
-
-**How it works:**
-- Pick a public port and a **FakeTLS fronting domain** — the connection is disguised as TLS 1.3 to that domain (e.g. `www.cloudflare.com`); a **↻** button next to the field fills in a random domain from a curated list.
-- The FakeTLS secret is **generated automatically** and shared as a **`tg://proxy` deep link** + QR — clicking it opens the Telegram app and prompts "Enable proxy?" directly.
-- The details window shows the protocol's real security: **FakeTLS**, **MTProto 2.0 (AES-256-IGE)** encryption, the cover domain, and the **mtg/mtg-multi sidecar version**.
-
-**Many users per port (multi-user).** On `amd64` / `arm64` the panel uses the **[mtg-multi](https://github.com/dolonet/mtg-multi)** fork, which serves many clients on a single port — handy behind NAT where you don't want one port-forward per user:
-- each client has a **unique UID** and a **free-form name** (several clients may share a name — like AmneziaWG);
-- its own FakeTLS secret, link/QR, traffic, quota, expiry, and online status;
-- on other architectures the panel transparently falls back to single-secret **mtg** (one client per port). The right binary is fetched by `install.sh` / `update.sh` automatically.
-
-**Anti-block egress.** An optional **Route through Xray** toggle: instead of dialing Telegram directly, mtg goes through a loopback SOCKS bridge that the panel injects into the running Xray config, routed to an **outbound of your choice** (e.g. a chain to a server where Telegram is reachable). Useful when Telegram is blocked on the panel host itself.
-
-Existing MTProto inbounds are **migrated automatically** on the first start after an update — secrets, settings, and recorded traffic are preserved, and old links keep working.
-
-### 3. Native WireGuard with native IPv6
-
-A separate **native WireGuard** protocol (no obfuscation) for when you want clean, maximum-speed WireGuard rather than AmneziaWG. Managed the same way from the **Inbounds** page: multi-client, automatic key generation, QR, `.conf`, statistics, limits, and expiry per peer.
-
-Clients can likewise be given a **native public IPv6** address from the server without NAT66 (via NDP proxy) and have ports forwarded (see sections 5 and 6). Compatible with standard WireGuard clients.
-
-### 4. AmneziaWG obfuscation parameters
-
-The AWG settings page lets you configure packet obfuscation parameters:
-
-| Parameter | Description |
-|-----------|-------------|
-| `Jc` | Number of junk packets before handshake |
-| `Jmin` / `Jmax` | Minimum and maximum size of junk packets |
-| `S1` / `S2` | Size of init/response headers |
-| `S3` / `S4` | (2.0) padding for cookie and transport packets |
-| `H1` – `H4` | Magic headers; in 2.0 they accept a range of values |
-| `I1` | (2.0) CPS signature packet before the handshake |
-
-These parameters are automatically written into each client's config — no manual configuration needed.
-
-### 5. Native IPv6 support without NAT
-
-AWG / native WireGuard clients can be assigned a **native public IPv6 address** from the server — without NAT66. This works via NDP proxy (ndppd or a built-in fallback using `ip -6 neigh add proxy`). Clients receive a real IPv6 address, which matters for services that require it.
-
-#### If IPv6 doesn't work: provider-side limitations
-
-NDP proxy may not work on a VPS for reasons outside your server's control:
-
-**1. Hypervisor blocks NDP packets (MAC filtering)**
-
-Many providers allow a VPS to send packets only from its own network interface MAC address. When `ndppd` forwards a Neighbor Advertisement on behalf of a client, the hypervisor treats this as IP spoofing and drops the packet. Everything looks correct inside the VPS, but client IPv6 traffic never reaches the internet.
-
-**2. Provider assigns a "link prefix" instead of a "routed prefix"**
-
-NDP proxy only works when the IPv6 block is **routed directly to your VPS**. Many providers connect multiple VPSes to a shared virtual network and assign addresses from a common pool — in this case, NDP proxy at the VPS level won't help.
-
-#### What to do
-
-Contact your provider's support. You need to find out:
-- **IPv6 allocation type:** is it a fully routed /64 prefix (routed to your VM) or an address from a shared pool (link prefix)? Only a routed prefix allows NDP proxy to work.
-- **Hypervisor-level NDP proxy:** does the control panel have an option to enable NDP proxy / Neighbor Discovery at the host level?
-- **IP spoofing allowance:** ask them to allow NDP packet forwarding from your VPS (disable MAC filtering for your interface at the hypervisor level).
-
-> **Message template for provider support:**
-> *"I'm running a server with multiple virtual network interfaces and need to assign individual public IPv6 addresses from my /64 block to each of them using NDP proxy. Could you please confirm whether my IPv6 allocation is a fully routed /64 prefix routed to my VM directly, and whether NDP Neighbor Advertisement packets originated from my VM are allowed through the hypervisor — or if they are dropped by MAC/ARP filtering on the host node?"*
-
-### 6. Per-client port forwarding for AmneziaWG / native WireGuard
-
-Each peer can forward arbitrary external ports straight to its tunnel IP for both **TCP and UDP** simultaneously — designed for game servers, P2P, voice apps, anything that needs an inbound port.
-
-**Input format** (free-form, validated):
-- single ports: `80, 443, 22`
-- ranges with a dash: `8000-8100`
-- mix freely, separated by `,` or `;`: `80, 443; 27015-27030`
-
-**How it works.** For each enabled client with non-empty forwarded ports the panel emits `iptables` DNAT + FORWARD rules (TCP and UDP) into wg-quick's `PostUp`/`PostDown`. Updates apply **live** via `iptables -A`/`-D` without restarting the tunnel — peer sessions are not interrupted. Each rule carries a unique `3ax-fwd-<uuid>` comment so removing one client's forwards never touches another's.
-
-The forwarded ports are visible in three places:
-- the client edit form (with format hint),
-- a dedicated "Mapping" column in the inbound's peer table,
-- a row in the details modal directly under "Port".
-
-### 7. SOCKS5 and HTTP proxies with full per-user infrastructure
-
-xray-core's `mixed` (SOCKS5) and `http` inbounds now share the **same VLESS-style stack** as VLESS / VMess / Trojan / Shadowsocks:
-- expandable peer table with per-client traffic, expiry, quota, IP limit, enable toggle;
-- standard rich client edit modal (auto-generated 6-character username + 16-character password, regenerable);
-- per-user traffic stats flow through xray's standard `user>>>EMAIL>>>traffic>>>...` keys, so the existing traffic and disable-on-quota / disable-on-expiry jobs handle MIXED/HTTP automatically;
-- "Add Client" entry in the inbound action menu, just like VLESS.
-
-The username remains editable after creation — renaming a client doesn't reset its traffic counters because the backend renames the underlying `client_traffic` row in place.
-
-### 8. Automatic protocol installation
-
-The install script (`install.sh`) automatically:
-- Installs the AmneziaWG kernel module via PPA `ppa:amnezia/ppa`, plus `awg-tools` and `ndppd`
-- Detects the server's external interface and configures PostUp/PostDown rules
-- Fetches the MTProto sidecar binary (mtg-multi on amd64/arm64, otherwise mtg) from the official releases
-- Sets up AWG autostart after server reboot
-- Detects Secure Boot and warns about potential DKMS module issues
-
-### 9. Install / update from a local git clone
-
-Both `install.sh` and `update.sh` detect when they are being run from inside a cloned repository (file presence + a BASH_SOURCE safety check) and **build the panel binary on the spot from the local source** instead of downloading the pre-built release tarball.
-
-```bash
-git clone https://github.com/coinman-dev/3ax-ui.git
-cd 3ax-ui
-sudo bash install.sh
-```
-
-If Go ≥ 1.21 isn't on the host, the script downloads Go 1.26.2 from go.dev automatically. With Go ≥ 1.21 the build self-bootstraps the toolchain pinned in `go.mod`. The remote-pipe flows (`bash <(curl ...)`, `curl ... | bash`) keep the existing GitHub-release behavior — the safety check rejects them so a user happening to be inside a clone of the repo while piping the script can't accidentally hit the local-build path.
-
-`x-ui.db` and `bin/` survive across re-installs and updates, so re-running the installer does not wipe the panel database.
-
-### 10. Debug / diagnostic install mode
-
-A first prompt at install time:
-
-```
-Install panel in debug / diagnostic mode (localhost only)? [y/N]
-(HTTP only, listen=127.0.0.1, default port 8080, no SSL or IPv6)
-```
-
-On `y` the panel binds to `127.0.0.1`, runs over plain HTTP on the chosen port, and skips the SSL prompt, the public-IP detection, and IPv6 work. Activate non-interactively with `XUI_DEBUG_MODE=1` (and optional `XUI_DEBUG_PORT=NNNN`).
-
-`update.sh` **doesn't ask** the question — it auto-detects whether the existing install is in debug mode (`listenIP == 127.0.0.1` and no SSL cert configured) and inherits the same setup with the existing port, so updates are non-interactive on a debug box.
-
-Protocol stacks (AmneziaWG, native WireGuard, MTProto, xray) install normally in debug mode — only the panel's web access is restricted to the loopback.
-
-### 11. Extras
-
-- **Telegram bot:** sends connection links and QR codes straight to the client's chat on creation; pushes AWG configs to linked clients (for the 2.0 migration).
-- **Configurable QR code size:** 300 / 450 (default) / 600 px.
-- **Secure subscription URL by default:** on install the subscription path is generated with a random 12-character suffix (e.g. `/sub-Xk92mPqLvzRt/`) instead of `/sub/`.
+Everything Xray-based and MTProto work today with zero privileges. AmneziaWG / native WireGuard land in Phase 2 via a userspace engine (design in [`.ai/PTERODACTYL_EGG_PLAN.md`](.ai/PTERODACTYL_EGG_PLAN.md)).
 
 ---
 
-## Server requirements
+## Quick start
 
-- **OS:** Ubuntu 22.04+ / Debian 11+
-- **Linux kernel:** 5.6+ (for built-in WireGuard), or an installed AmneziaWG DKMS module
-- **RAM:** 1024 MB or more
-- **Architecture:** amd64 / arm64 (multi-user MTProto is available only on these; on other arches MTProto runs in single-secret mode)
+Full operator guide: **[`pterodactyl/README.md`](pterodactyl/README.md)**.
 
-> **Secure Boot:** If Secure Boot is enabled on the server, the AmneziaWG DKMS module may fail to load. The install script will warn you automatically.
+**1. Build & push the image** (from the repo root):
+
+```bash
+docker buildx build -f pterodactyl/Dockerfile \
+  --platform linux/amd64,linux/arm64 \
+  -t ghcr.io/iwebbio/3ax-ui-pterodactyl:latest --push .
+```
+
+**2. Import the egg:** Pterodactyl admin → **Nests → Import Egg** → upload [`pterodactyl/egg-3ax-ui.json`](pterodactyl/egg-3ax-ui.json).
+
+**3. Create a server:** assign the **primary allocation** for the panel plus **one extra high port per inbound** you plan to run. Only allocated ports are reachable from the internet (TCP+UDP).
+
+**4. Log in:** start the server; when the console shows `3AX-UI online — panel listening on port <N>`, open `http://<node-ip>:<primary-port>/`.
 
 ---
 
-## Installation
+## Protocol notes
 
-```bash
-# Stable release
-bash <(curl -Ls https://raw.githubusercontent.com/coinman-dev/3ax-ui/main/install.sh)
+### MTProto — Telegram proxy (FakeTLS)
+A FakeTLS proxy for Telegram, run as a standalone `mtg` / `mtg-multi` sidecar (not Xray) and managed from the **Inbounds** page like any other protocol.
 
-# Latest pre-release
-bash <(curl -Ls https://raw.githubusercontent.com/coinman-dev/3ax-ui/main/install.sh) --beta
+- Pick a public (allocated) port and a **FakeTLS fronting domain** — the connection is disguised as TLS 1.3 to that domain; a **↻** button fills a random domain from a curated list.
+- The FakeTLS secret is generated automatically and shared as a **`tg://proxy` deep link** + QR.
+- **Multi-user** on amd64/arm64 via [mtg-multi](https://github.com/dolonet/mtg-multi): many clients on one port, each with a unique UID, name, secret, link/QR, traffic, quota, expiry, and online status. Other arches fall back to single-secret [mtg](https://github.com/9seconds/mtg).
+- Optional **Route through Xray**: mtg dials Telegram through a loopback SOCKS bridge injected into the running Xray config, so egress obeys Xray routing (useful when Telegram is blocked on the node itself).
 
-# Specific version
-bash <(curl -Ls https://raw.githubusercontent.com/coinman-dev/3ax-ui/main/install.sh) v1.2.1
-```
+### SOCKS5 & HTTP proxies with per-user infrastructure
+Xray's `mixed` (SOCKS5) and `http` inbounds share the same VLESS-style stack as VLESS/VMess/Trojan/Shadowsocks: expandable peer table with per-client traffic, expiry, quota, IP limit, and enable toggle; auto-generated credentials (regenerable); per-user stats via Xray's standard traffic keys, so quota/expiry jobs handle them automatically. Usernames stay editable after creation without resetting traffic counters.
 
-## Panel Update
+### AmneziaWG & native WireGuard (Phase 2)
+AmneziaWG is WireGuard with packet obfuscation that makes traffic indistinguishable from random noise (defeats DPI in Russia/Iran/China). On a normal host this fork drives it via the kernel (`awg-quick` + iptables + NDP) — which is impossible in an unprivileged Pterodactyl container.
 
-```bash
-# Stable release
-bash <(curl -Ls https://raw.githubusercontent.com/coinman-dev/3ax-ui/main/update.sh)
-
-# Latest pre-release
-bash <(curl -Ls https://raw.githubusercontent.com/coinman-dev/3ax-ui/main/update.sh) --beta
-```
+Phase 2 replaces that with a **userspace netstack engine**: `amneziawg-go` / `wireguard-go` run in-process with a gVisor userspace network stack (no TUN device, no capabilities), and an in-process forwarder NATs client flows to the internet — optionally through Xray's routing. Obfuscation is fully preserved; the tradeoff is that native-public-IPv6 handout degrades to NAT/routed egress. Progress and design live in [`.ai/PTERODACTYL_EGG_PLAN.md`](.ai/PTERODACTYL_EGG_PLAN.md).
 
 ---
 
-## AmneziaWG quick start
+## What's different from a normal 3ax-ui install
 
-1. Log into the panel → **AWG Settings**
-2. Configure network parameters and obfuscation settings (or click **Generate** for a 2.0 set)
-3. Go to **Inbounds** → **Add Inbound**
-4. Select the **amneziawg** protocol, enter a client email, and click **Create**
-5. In the client table, click the QR code icon and scan it in the AmneziaVPN app
+| Area | Normal (VPS) | This fork (Pterodactyl) |
+|---|---|---|
+| Process supervision | systemd + `x-ui.sh` menu | Single `/app/x-ui` process, supervised by Wings; `^C` = graceful stop |
+| Storage | `/etc/x-ui`, `/var/log/x-ui`, `bin/` | All under `/home/container` via `XUI_DB_FOLDER` / `XUI_LOG_FOLDER` / `XUI_BIN_FOLDER` |
+| Ports | any port, incl. privileged | Only server **allocations** (high ports); panel on the primary |
+| Binaries | fetched by `install.sh` | Baked into the Docker image |
+| WireGuard/AmneziaWG | kernel (`awg-quick`, TUN, iptables) | Userspace netstack, no root (Phase 2) |
+| fail2ban | enabled | disabled (no root) |
+| TLS | ACME HTTP-01 on :80/:443 | Upload certs to `/home/container/cert`, or use DNS-01 |
 
-## MTProto (Telegram) quick start
+Set the **external address** (node IP or domain) in the panel settings so client links and subscription URLs resolve correctly — the container can't auto-detect the node's public address.
 
-1. **Inbounds** → **Add Inbound** → **MTProto (Telegram)** protocol
-2. Set the port and a fronting domain (or click **↻** for a random one), name the first client → **Create**
-3. Open the client's QR / link in the table — clicking the `tg://` link opens Telegram and offers to enable the proxy
-4. To add more users on the same port, use the add-client button in the inbound's row (on amd64/arm64)
+---
+
+## Repository layout (Pterodactyl-specific)
+
+```
+pterodactyl/
+├── Dockerfile        — unprivileged (uid 988) yolk; bakes panel + Xray + mtg
+├── entrypoint.sh     — maps XUI_* to /home/container, first-boot port/admin, exec panel
+├── fetch-bins.sh     — bakes MTProto sidecars per arch
+├── egg-3ax-ui.json   — Pterodactyl egg (PTDL_v2)
+└── README.md         — operator guide
+.ai/PTERODACTYL_EGG_PLAN.md — full porting plan, decisions, and phase status
+```
+
+The upstream panel source (`web/`, `xray/`, `awg/`, `wg/`, `mtproto/`, `sub/`, …) is unchanged except for the small Pterodactyl adaptations tracked in the plan.
 
 ---
 
@@ -261,30 +121,32 @@ bash <(curl -Ls https://raw.githubusercontent.com/coinman-dev/3ax-ui/main/update
 
 | Protocol | Client | Platforms |
 |----------|--------|-----------|
-| AmneziaWG | AmneziaVPN — [amnezia.org](https://amnezia.org) | Android, iOS, Windows, macOS, Linux |
-| native WireGuard | Official WireGuard | All platforms |
+| VLESS / VMess / Trojan / Shadowsocks | v2rayN, v2rayNG, Nekoray, sing-box, Streisand, etc. | All platforms |
+| SOCKS5 / HTTP | any standard proxy client | All platforms |
 | MTProto | Telegram (built-in proxy support) | All platforms |
+| AmneziaWG (Phase 2) | AmneziaVPN — [amnezia.org](https://amnezia.org) | Android, iOS, Windows, macOS, Linux |
+| native WireGuard (Phase 2) | Official WireGuard | All platforms |
 
-> Standard WireGuard clients are **not compatible** with AmneziaWG — they do not support obfuscation parameters.
+> Standard WireGuard clients are **not** compatible with AmneziaWG — they don't support obfuscation parameters.
 
 ---
 
 ## Based on
 
-3AX-UI is based on **[3x-ui](https://github.com/MHSanaei/3x-ui)** by [MHSanaei](https://github.com/MHSanaei). All original features (VLESS, VMess, Trojan, Shadowsocks, WireGuard, Xray, subscriptions, Telegram bot, etc.) are fully preserved.
-
-The MTProto proxy runs on the **[mtg](https://github.com/9seconds/mtg)** sidecar (single-secret) and its **[mtg-multi](https://github.com/dolonet/mtg-multi)** fork (multi-user).
+- **[coinman-dev/3ax-ui](https://github.com/coinman-dev/3ax-ui)** — the direct upstream (adds AmneziaWG, native WireGuard, MTProto).
+- **[MHSanaei/3x-ui](https://github.com/MHSanaei/3x-ui)** — the panel 3ax-ui itself forks (VLESS, VMess, Trojan, Shadowsocks, Xray, subscriptions, Telegram bot).
+- MTProto sidecars: **[9seconds/mtg](https://github.com/9seconds/mtg)** (single-secret) and **[dolonet/mtg-multi](https://github.com/dolonet/mtg-multi)** (multi-user).
 
 ## Acknowledgements
 
 - [MHSanaei](https://github.com/MHSanaei/) — author of the original 3x-ui
 - [alireza0](https://github.com/alireza0/) — author of the original x-ui
+- [coinman-dev](https://github.com/coinman-dev/3ax-ui) — the 3ax-ui fork this project builds on
 - [9seconds/mtg](https://github.com/9seconds/mtg) and [dolonet/mtg-multi](https://github.com/dolonet/mtg-multi) — MTProto sidecars
-- [Iran v2ray rules](https://github.com/chocolate4u/Iran-v2ray-rules) (GPL-3.0)
-- [Russia v2ray rules](https://github.com/runetfreedom/russia-v2ray-rules-dat) (GPL-3.0)
+- [Iran v2ray rules](https://github.com/chocolate4u/Iran-v2ray-rules) (GPL-3.0) · [Russia v2ray rules](https://github.com/runetfreedom/russia-v2ray-rules-dat) (GPL-3.0)
 
 ---
 
 ## License
 
-This project is distributed under the same license as the original 3x-ui — [GNU GPL v3](LICENSE).
+Distributed under the same license as the original 3x-ui — [GNU GPL v3](LICENSE).

@@ -8,7 +8,7 @@
 # Build (from repo root):
 #   docker buildx build -f pterodactyl/Dockerfile \
 #     --platform linux/amd64,linux/arm64 \
-#     -t ghcr.io/coinman-dev/3ax-ui-pterodactyl:latest --push .
+#     -t ghcr.io/iwebbio/3ax-ui-pterodactyl:latest --push .
 # ========================================================
 
 # -------- Stage: build the panel + fetch binaries --------
@@ -35,7 +35,7 @@ RUN bash pterodactyl/fetch-bins.sh "${TARGETARCH}" build/bin
 # -------- Stage: minimal unprivileged runtime --------
 FROM alpine:3.20
 LABEL org.opencontainers.image.title="3AX-UI (Pterodactyl)" \
-      org.opencontainers.image.source="https://github.com/coinman-dev/3ax-ui-pterodactyl" \
+      org.opencontainers.image.source="https://github.com/iWebbIO/3ax-ui-pterodactyl" \
       org.opencontainers.image.description="3AX-UI panel packaged as a Pterodactyl egg (userspace, no root)."
 
 ENV TZ=UTC \

@@ -21,7 +21,7 @@ From the repo root:
 ```bash
 docker buildx build -f pterodactyl/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/coinman-dev/3ax-ui-pterodactyl:latest --push .
+  -t ghcr.io/iwebbio/3ax-ui-pterodactyl:latest --push .
 ```
 
 (Single-arch local test: `docker build -f pterodactyl/Dockerfile -t 3ax-ui-ptero:test .`)

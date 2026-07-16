@@ -1,7 +1,11 @@
-# 3X-UI Development Guide
+# 3AX-UI (Pterodactyl) Development Guide
 
 ## Project Overview
-3X-UI is a web-based control panel for managing Xray-core servers. It's a Go application using Gin web framework with embedded static assets and SQLite database. The panel manages VPN/proxy inbounds, monitors traffic, and provides Telegram bot integration.
+This repo is **3AX-UI for Pterodactyl** — a fork of [coinman-dev/3ax-ui](https://github.com/coinman-dev/3ax-ui) whose sole purpose is running the panel as an **unprivileged Pterodactyl egg** (no root, no `/dev/net/tun`, only `/home/container` writable, ports from allocations). The panel itself is a Go/Gin app with embedded static assets and a SQLite database, managing VPN/proxy inbounds, traffic, and a Telegram bot.
+
+**Two areas of work:** (1) the shared **panel source** (`web/`, `xray/`, `awg/`, `wg/`, `mtproto/`, `sub/`, …) — keep changes minimal so the fork rebases cleanly on upstream; (2) the **Pterodactyl packaging** in `pterodactyl/`. The porting plan, decisions, and phase status live in `.ai/PTERODACTYL_EGG_PLAN.md` — read it before touching Pterodactyl-facing behavior.
+
+> Constraint reminder: kernel-dependent features (kernel AmneziaWG/WireGuard via `awg-quick`/`wg-quick`, iptables port-forwarding, NDP-proxy IPv6, fail2ban) **do not work** in an unprivileged Pterodactyl container. AmneziaWG/WireGuard are being reimplemented as a userspace netstack engine (Phase 2). Xray protocols and MTProto work as-is.
 
 ## Architecture
 
@@ -87,9 +91,9 @@ func (a *InboundController) getInbounds(c *gin.Context) {
 ```
 
 ### Configuration Management
-- Environment vars: `XUI_DEBUG`, `XUI_LOG_LEVEL`, `XUI_MAIN_FOLDER`
+- Environment vars: `XUI_DEBUG`, `XUI_LOG_LEVEL`, and the storage-path overrides `XUI_DB_FOLDER`, `XUI_LOG_FOLDER`, `XUI_BIN_FOLDER` (all defined in `config/config.go`). On Pterodactyl these point under `/home/container`; `XUI_ENABLE_FAIL2BAN=false` there.
 - Config embedded files: `config/version`, `config/name`
-- Use `config.GetLogLevel()`, `config.GetDBPath()` helpers
+- Use `config.GetLogLevel()`, `config.GetDBPath()`, `config.GetBinFolderPath()` helpers
 
 ### Internationalization
 - Translation files: `web/translation/translate.*.toml`
@@ -127,16 +131,23 @@ Both `install.sh` and `x-ui.sh` follow these patterns:
 - Port detection with `is_port_in_use()` using ss/netstat/lsof
 - Systemd service management with distro-specific unit files (`.service.debian`, `.service.arch`, `.service.rhel`)
 
-### Docker Build
-Multi-stage Dockerfile:
+### Docker Build (upstream, VPS)
+Root `Dockerfile` — multi-stage:
 1. **Builder**: CGO-enabled build, runs `DockerInit.sh` to download Xray binary
 2. **Final**: Alpine-based with fail2ban pre-configured
 
-### Key File Locations (Production)
-- Binary: `/usr/local/x-ui/`
-- Database: `/etc/x-ui/x-ui.db`
-- Logs: `/var/log/x-ui/`
-- Service: `/etc/systemd/system/x-ui.service.*`
+### Pterodactyl packaging (this fork's target)
+Everything Pterodactyl-specific is under `pterodactyl/`:
+- `Dockerfile` — unprivileged (uid 988) Alpine/musl yolk; bakes `x-ui` + Xray + geo (`DockerInit.sh`) + `mtg`/`mtg-multi` (`fetch-bins.sh`). No node-side downloads.
+- `entrypoint.sh` — sets `XUI_*` to `/home/container`, disables fail2ban, syncs baked binaries onto the volume, first-boot binds the panel to the primary allocation (`SERVER_PORT`) and seeds admin creds, then `exec`s `/app/x-ui`.
+- `fetch-bins.sh` — bakes the MTProto sidecars per arch.
+- `egg-3ax-ui.json` — PTDL_v2 egg: `startup` `/app/x-ui`, `startup.done` regex `3AX-UI online`, `stop` `^C`, variables `PANEL_PORT`/`PANEL_USERNAME`/`PANEL_PASSWORD`.
+
+**Keep in sync** when changing the runtime contract: the `3AX-UI online` readiness marker in `main.go` ↔ the egg `startup.done` regex; the `stop` signal ↔ the `signal.Notify` set in `main.go` (includes `SIGINT` for `^C`).
+
+### Key File Locations
+- **Upstream / VPS:** binary `/usr/local/x-ui/`, DB `/etc/x-ui/x-ui.db`, logs `/var/log/x-ui/`, service `/etc/systemd/system/x-ui.service.*`.
+- **Pterodactyl:** baked binary `/app/x-ui` + `/app/bin/`; runtime data under `/home/container/{db,log,bin,cert}` (via `XUI_DB_FOLDER`/`XUI_LOG_FOLDER`/`XUI_BIN_FOLDER`); no systemd.
 
 ## Testing & Debugging
 - Set `XUI_DEBUG=true` for detailed logging

@@ -6,10 +6,14 @@
 
 ## Что это за проект
 
-**3AX-UI** — форк панели управления [3x-ui](https://github.com/mhsanaei/3x-ui), переработанный и переименованный с потдержкой AmneziaWG.  
-Веб-панель для управления прокси-сервером **Xray-core** (vless, vmess, trojan, shadowsocks, wireguard/AWG).
+**3AX-UI для Pterodactyl** — форк [coinman-dev/3ax-ui](https://github.com/coinman-dev/3ax-ui) (который сам форкает [3x-ui](https://github.com/mhsanaei/3x-ui)).
+Единственная цель этого форка — **запуск панели как непривилегированного Pterodactyl-egg**: без root, без `/dev/net/tun`, доступна для записи только `/home/container`, порты — из аллокаций.
+Веб-панель для управления прокси-сервером **Xray-core** (vless, vmess, trojan, shadowsocks, wireguard/AWG) + MTProto.
 
-- Репозиторий: `https://github.com/coinman-dev/3ax-ui`
+> ⚠️ **Ограничение среды Pterodactyl:** функции уровня ядра (kernel AmneziaWG/WireGuard через `awg-quick`/`wg-quick`, проброс портов через iptables, IPv6 через NDP-прокси, fail2ban) **не работают** в непривилегированном контейнере. AmneziaWG/WireGuard переписываются на userspace-движок (netstack) — Фаза 2. Протоколы Xray и MTProto работают как есть.
+> План портирования, решения и статус фаз: **`.ai/PTERODACTYL_EGG_PLAN.md`**. Артефакты egg: каталог **`pterodactyl/`**.
+
+- Репозиторий: `https://github.com/iWebbIO/3ax-ui-pterodactyl` (upstream: `https://github.com/coinman-dev/3ax-ui`)
 - Go module: `github.com/coinman-dev/3ax-ui/v2`
 - Язык бэкенда: Go 1.26
 - Фронтенд: Vue 2 + Ant Design Vue (без сборщика, plain JS)
@@ -40,9 +44,13 @@
 │   ├── subController.go     — хендлеры /sub/:id и /json/:id
 │   └── subService.go        — генерация ссылок vless/vmess/trojan/ss, PageData
 ├── awg/                     — AmneziaWG (форк WireGuard)
+├── wg/                      — нативный WireGuard
+├── mtproto/                 — MTProto (сайдкары mtg / mtg-multi)
 ├── xray/                    — управление процессом Xray-core
 ├── logger/                  — логирование
 ├── util/                    — утилиты (common, random, ...)
+├── pterodactyl/             — упаковка в Pterodactyl-egg (Dockerfile, entrypoint.sh, fetch-bins.sh, egg-3ax-ui.json, README.md)
+├── .ai/PTERODACTYL_EGG_PLAN.md — план портирования, решения, статус фаз
 ├── .github/workflows/       — CI/CD
 │   ├── release.yml          — основной: lint + build (7 платформ Linux + Windows)
 │   ├── docker.yml           — Docker образ
