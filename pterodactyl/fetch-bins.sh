@@ -66,5 +66,16 @@ if [ "$got_multi" != 1 ]; then
             mtg "$BIN/mtg-linux-${FNAME}" || true
 fi
 
+# cloudflared (Cloudflare Tunnel) — a plain, statically-linked binary named to
+# match the panel's lookup (bin/cloudflared-linux-<GOARCH>). Non-fatal.
+echo "Fetching cloudflared (Cloudflare Tunnel) for ${FNAME}..."
+if curl -4fLRo "$BIN/cloudflared-linux-${FNAME}" \
+     "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${FNAME}"; then
+  chmod +x "$BIN/cloudflared-linux-${FNAME}"
+  echo "  installed cloudflared-linux-${FNAME}"
+else
+  echo "  WARN: could not fetch cloudflared — Cloudflare Tunnel will be unavailable"
+fi
+
 echo "fetch-bins: done for ${ARCH}"
 exit 0

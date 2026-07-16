@@ -35,6 +35,7 @@ If you want a traditional VPS install (systemd, `install.sh`, kernel AmneziaWG),
 | **VLESS, VMess, Trojan, Shadowsocks** | ✅ Available | Full Xray transports: TCP, WS, gRPC, HTTPUpgrade, XHTTP, mKCP, QUIC — plus **REALITY** and **XTLS** |
 | **SOCKS5 & HTTP** proxies | ✅ Available | Full per-user infrastructure (traffic, quota, expiry, IP limit) |
 | **MTProto** (Telegram FakeTLS) | ✅ Available | `mtg-multi` (multi-user) on amd64/arm64, single-secret `mtg` elsewhere |
+| **Cloudflare Tunnel** (cloudflared) | ✅ Available | Built-in, supervised. Expose the panel/inbounds at an HTTPS hostname with no inbound port — quick (`trycloudflare.com`) or token (your domain) |
 | **AmneziaWG** (1.x & 2.0) | ✅ Userspace¹ | In-process amneziawg-go + gVisor netstack — obfuscation preserved, no root |
 | **native WireGuard** | ✅ Userspace¹ | Same in-process engine |
 | Native public IPv6 without NAT (NDP proxy) | ❌ Not on Pterodactyl | Needs `CAP_NET_ADMIN` + a routed prefix on the host; egress is NAT/routed instead |
@@ -75,6 +76,9 @@ A FakeTLS proxy for Telegram, run as a standalone `mtg` / `mtg-multi` sidecar (n
 - **Multi-user** on amd64/arm64 via [mtg-multi](https://github.com/dolonet/mtg-multi): many clients on one port, each with a unique UID, name, secret, link/QR, traffic, quota, expiry, and online status. Other arches fall back to single-secret [mtg](https://github.com/9seconds/mtg).
 - Optional **Route through Xray**: mtg dials Telegram through a loopback SOCKS bridge injected into the running Xray config, so egress obeys Xray routing (useful when Telegram is blocked on the node itself).
 
+### Cloudflare Tunnel (cloudflared)
+A **built-in, supervised** Cloudflare Tunnel — the cleanest way to reach the panel on Pterodactyl, since it's outbound-only (no inbound allocation, no public IP, no cert; Cloudflare terminates TLS). **Quick mode** (`XUI_CF_ENABLE=true`) prints an instant `*.trycloudflare.com` URL in the console; **token mode** (`XUI_CF_TOKEN=…`) runs a named tunnel on your own domain via the Cloudflare Zero Trust dashboard. The `cloudflared` binary is baked into the image; the panel starts/stops it with the process and auto-restarts it on drops. Controllable via env vars or the `/panel/cloudflared/*` API. See [`pterodactyl/README.md`](pterodactyl/README.md#cloudflare-tunnel-cloudflared--recommended).
+
 ### SOCKS5 & HTTP proxies with per-user infrastructure
 Xray's `mixed` (SOCKS5) and `http` inbounds share the same VLESS-style stack as VLESS/VMess/Trojan/Shadowsocks: expandable peer table with per-client traffic, expiry, quota, IP limit, and enable toggle; auto-generated credentials (regenerable); per-user stats via Xray's standard traffic keys, so quota/expiry jobs handle them automatically. Usernames stay editable after creation without resetting traffic counters.
 
@@ -95,7 +99,7 @@ This fork adds an **in-process userspace engine** (`shared/wgengine`): `amneziaw
 | Binaries | fetched by `install.sh` | Baked into the Docker image |
 | WireGuard/AmneziaWG | kernel (`awg-quick`, TUN, iptables) | In-process userspace engine, no root (`shared/wgengine`) |
 | fail2ban | enabled | disabled (no root) |
-| TLS | ACME HTTP-01 on :80/:443 | Upload certs to `/home/container/cert`, or use DNS-01 |
+| TLS / access | ACME HTTP-01 on :80/:443 | **Cloudflare Tunnel** (built-in, recommended — HTTPS hostname, no inbound port), or upload certs to `/home/container/cert` |
 
 Set the **external address** (node IP or domain) in the panel settings so client links and subscription URLs resolve correctly — the container can't auto-detect the node's public address.
 

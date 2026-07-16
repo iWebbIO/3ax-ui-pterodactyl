@@ -10,6 +10,7 @@ type XUIController struct {
 
 	settingController     *SettingController
 	xraySettingController *XraySettingController
+	cloudflaredController *CloudflaredController
 }
 
 // NewXUIController creates a new XUIController and initializes its routes.
@@ -33,6 +34,7 @@ func (a *XUIController) initRouter(g *gin.RouterGroup) {
 
 	a.settingController = NewSettingController(g)
 	a.xraySettingController = NewXraySettingController(g)
+	a.cloudflaredController = NewCloudflaredController(g)
 }
 
 // index renders the main panel index page.

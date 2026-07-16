@@ -12,6 +12,7 @@ import (
 	_ "unsafe"
 
 	"github.com/coinman-dev/3ax-ui/v2/awg"
+	"github.com/coinman-dev/3ax-ui/v2/cloudflared"
 	"github.com/coinman-dev/3ax-ui/v2/config"
 	"github.com/coinman-dev/3ax-ui/v2/database"
 	"github.com/coinman-dev/3ax-ui/v2/database/model"
@@ -74,10 +75,17 @@ func runWebServer() {
 	// Stable, greppable readiness marker on stdout. Process supervisors that
 	// watch console output (e.g. the Pterodactyl egg's startup detection) key
 	// on this line to know the panel is fully up.
-	if panelPort, portErr := (service.SettingService{}).GetPort(); portErr == nil {
+	lifecycleSettings := &service.SettingService{}
+	if panelPort, portErr := lifecycleSettings.GetPort(); portErr == nil {
 		log.Printf("3AX-UI online — panel listening on port %d", panelPort)
 	} else {
 		log.Println("3AX-UI online — panel listening")
+	}
+
+	// Start the Cloudflare Tunnel (cloudflared) if enabled via settings/env. It
+	// runs as a supervised sidecar and is a no-op when disabled or not installed.
+	if err := cloudflared.GetManager().Apply(lifecycleSettings.GetCloudflaredConfig()); err != nil {
+		logger.Warning("cloudflared: not started:", err)
 	}
 
 	sigCh := make(chan os.Signal, 1)
@@ -134,6 +142,7 @@ func runWebServer() {
 			service.StopBot()
 			// ------------------------------------------------------------
 
+			cloudflared.GetManager().Stop()
 			server.Stop()
 			subServer.Stop()
 			log.Println("Shutting down servers.")

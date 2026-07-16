@@ -88,6 +88,13 @@ var defaultValueMap = map[string]string{
 	"restartXrayOnClientDisable":  "true",
 	"xrayOutboundTestUrl":         "https://www.google.com/generate_204",
 
+	// Cloudflare Tunnel (cloudflared) — expose the panel via Cloudflare's edge
+	// with no inbound port. Also settable via XUI_CF_* env vars (which win).
+	"cfTunnelEnable": "false",
+	"cfTunnelMode":   "quick", // quick | token
+	"cfTunnelToken":  "",
+	"cfTunnelTarget": "", // empty ⇒ default to the local panel (http://127.0.0.1:<webPort>)
+
 	// LDAP defaults
 	"ldapEnable":            "false",
 	"ldapHost":              "",

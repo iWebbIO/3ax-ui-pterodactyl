@@ -25,10 +25,11 @@ mkdir -p "$XUI_DB_FOLDER" "$XUI_LOG_FOLDER" "$XUI_BIN_FOLDER" /home/container/ce
 # on the volume untouched, and picks up new versions when the image updates.
 if [ -d /app/bin ]; then
   for f in /app/bin/xray-linux-* /app/bin/geoip*.dat /app/bin/geosite*.dat \
-           /app/bin/mtg-linux-* /app/bin/mtg-multi-linux-*; do
+           /app/bin/mtg-linux-* /app/bin/mtg-multi-linux-* /app/bin/cloudflared-linux-*; do
     [ -e "$f" ] && cp -f "$f" "$XUI_BIN_FOLDER/" 2>/dev/null || true
   done
-  chmod +x "$XUI_BIN_FOLDER"/xray-linux-* "$XUI_BIN_FOLDER"/mtg-* 2>/dev/null || true
+  chmod +x "$XUI_BIN_FOLDER"/xray-linux-* "$XUI_BIN_FOLDER"/mtg-* \
+           "$XUI_BIN_FOLDER"/cloudflared-* 2>/dev/null || true
 fi
 
 # --- First-boot provisioning (only when no database exists yet) ------------

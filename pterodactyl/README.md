@@ -59,6 +59,36 @@ port <N>`, open `http://<node-ip>:<primary-port>/` and log in.
   client links and subscription URLs resolve correctly — the container can't
   auto-detect the node's public address.
 
+## Cloudflare Tunnel (cloudflared) — recommended
+
+A **Cloudflare Tunnel** is the cleanest way to reach the panel on Pterodactyl: it
+is outbound-only, so it needs **no inbound allocation, no public IP, no
+certificate** — Cloudflare terminates TLS and gives you a real HTTPS hostname.
+`cloudflared` is baked into the image and supervised by the panel (auto-restart
+on drop). Two modes:
+
+**Quick tunnel (no account, instant):** set the egg variable **`XUI_CF_ENABLE=true`**
+(leave the token blank). On boot the console logs a URL like
+`https://<random>.trycloudflare.com` — open it to reach the panel. Ephemeral: the
+hostname changes on each restart.
+
+**Named tunnel (your domain, persistent):** in the Cloudflare **Zero Trust →
+Networks → Tunnels** dashboard, create a tunnel, add a **public hostname** routing
+`panel.example.com` → `http://127.0.0.1:<panel port>`, copy the connector token,
+and set the egg variable **`XUI_CF_TOKEN=<token>`** (this auto-enables token mode).
+
+Env variables (also editable via the panel API at `/panel/cloudflared/*`):
+
+| Variable | Meaning |
+|---|---|
+| `XUI_CF_ENABLE` | `true`/`false` — enable the tunnel (auto-on when a token is set) |
+| `XUI_CF_TOKEN` | connector token for a named tunnel; blank ⇒ quick tunnel |
+| `XUI_CF_MODE` | `quick` or `token`; blank ⇒ inferred from whether a token is set |
+| `XUI_CF_TARGET` | local service to expose; defaults to the panel (`http://127.0.0.1:<port>`) |
+
+You can also expose an **inbound** (not the panel) by pointing a named tunnel's
+hostname at that inbound's local port, or by setting `XUI_CF_TARGET`.
+
 ## Subscriptions
 
 You choose in the panel: run the subscription service on its **own dedicated

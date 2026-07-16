@@ -140,7 +140,9 @@ Root `Dockerfile` — multi-stage:
 Everything Pterodactyl-specific is under `pterodactyl/`:
 - `Dockerfile` — unprivileged (uid 988) Alpine/musl yolk; bakes `x-ui` + Xray + geo (`DockerInit.sh`) + `mtg`/`mtg-multi` (`fetch-bins.sh`). No node-side downloads.
 - `entrypoint.sh` — sets `XUI_*` to `/home/container`, disables fail2ban, syncs baked binaries onto the volume, first-boot binds the panel to the primary allocation (`SERVER_PORT`) and seeds admin creds, then `exec`s `/app/x-ui`.
-- `fetch-bins.sh` — bakes the MTProto sidecars per arch.
+- `fetch-bins.sh` — bakes the MTProto sidecars **and cloudflared** per arch.
+
+**Cloudflare Tunnel:** the `cloudflared/` package is a supervised sidecar (like `mtproto/`) that exposes the panel via a Cloudflare Tunnel — outbound-only, no inbound port. Driven by `XUI_CF_*` env / `cfTunnel*` settings; `main.go` starts it after the panel is up and stops it on shutdown; `web/controller/cloudflared.go` exposes `/panel/cloudflared/*`.
 - `egg-3ax-ui.json` — PTDL_v2 egg: `startup` `/app/x-ui`, `startup.done` regex `3AX-UI online`, `stop` `^C`, variables `PANEL_PORT`/`PANEL_USERNAME`/`PANEL_PASSWORD`.
 
 **Keep in sync** when changing the runtime contract: the `3AX-UI online` readiness marker in `main.go` ↔ the egg `startup.done` regex; the `stop` signal ↔ the `signal.Notify` set in `main.go` (includes `SIGINT` for `^C`).

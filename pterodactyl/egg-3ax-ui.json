@@ -57,6 +57,36 @@
       "user_editable": true,
       "rules": "nullable|string|max:128",
       "field_type": "text"
+    },
+    {
+      "name": "Cloudflare Tunnel: enable",
+      "description": "Expose the panel via a Cloudflare Tunnel (cloudflared) — a real HTTPS hostname with no inbound port. Set to true to enable. If you provide a token below, this is turned on automatically.",
+      "env_variable": "XUI_CF_ENABLE",
+      "default_value": "false",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|in:true,false",
+      "field_type": "text"
+    },
+    {
+      "name": "Cloudflare Tunnel: token",
+      "description": "Connector token for a NAMED tunnel from the Cloudflare Zero Trust dashboard (Networks → Tunnels). Configure the hostname→service mapping there (service = http://127.0.0.1:<panel port>). Leave blank to use a quick trycloudflare.com URL instead.",
+      "env_variable": "XUI_CF_TOKEN",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string",
+      "field_type": "text"
+    },
+    {
+      "name": "Cloudflare Tunnel: mode",
+      "description": "quick = ephemeral *.trycloudflare.com URL (no account, watch the console log for the URL). token = named tunnel using the token above. Leave blank to auto-detect from whether a token is set.",
+      "env_variable": "XUI_CF_MODE",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|in:quick,token",
+      "field_type": "text"
     }
   ]
 }

@@ -35,6 +35,7 @@
 | **VLESS, VMess, Trojan, Shadowsocks** | ✅ Доступно | Все транспорты Xray: TCP, WS, gRPC, HTTPUpgrade, XHTTP, mKCP, QUIC — плюс **REALITY** и **XTLS** |
 | **SOCKS5 и HTTP** прокси | ✅ Доступно | Полная инфраструктура по пользователям (трафик, квоты, срок, лимит IP) |
 | **MTProto** (Telegram FakeTLS) | ✅ Доступно | `mtg-multi` (мультипользовательский) на amd64/arm64, одиночный `mtg` на прочих |
+| **Cloudflare Tunnel** (cloudflared) | ✅ Доступно | Встроенный, под супервизией. Доступ к панели/inbound по HTTPS-хосту без входящего порта — quick (`trycloudflare.com`) или token (свой домен) |
 | **AmneziaWG** (1.x и 2.0) | ✅ Userspace¹ | Встроенный amneziawg-go + gVisor netstack — обфускация сохранена, без root |
 | **нативный WireGuard** | ✅ Userspace¹ | Тот же встроенный движок |
 | Нативный публичный IPv6 без NAT (NDP-прокси) | ❌ Не в Pterodactyl | Требует `CAP_NET_ADMIN` + маршрутизируемый префикс на хосте; трафик идёт через NAT |
@@ -75,6 +76,9 @@ FakeTLS-прокси для Telegram, запускается как отдель
 - **Мультипользовательский режим** на amd64/arm64 через [mtg-multi](https://github.com/dolonet/mtg-multi): много клиентов на одном порту, у каждого свой UID, имя, секрет, ссылка/QR, трафик, квота, срок и статус онлайн. На прочих архитектурах — откат на одиночный [mtg](https://github.com/9seconds/mtg).
 - Опция **Route through Xray**: mtg ходит в Telegram через loopback-SOCKS-мост, внедрённый в конфиг Xray, поэтому исходящий трафик подчиняется маршрутизации Xray (полезно, когда Telegram заблокирован на самом узле).
 
+### Cloudflare Tunnel (cloudflared)
+**Встроенный туннель под супервизией** — самый удобный способ достучаться до панели на Pterodactyl: соединение только исходящее (не нужны входящий порт, публичный IP и сертификат; TLS терминирует Cloudflare). **Quick-режим** (`XUI_CF_ENABLE=true`) сразу печатает в консоль URL вида `*.trycloudflare.com`; **token-режим** (`XUI_CF_TOKEN=…`) поднимает именованный туннель на вашем домене через панель Cloudflare Zero Trust. Бинарник `cloudflared` вшит в образ; панель запускает/останавливает его вместе с собой и перезапускает при обрывах. Управляется через env-переменные или API `/panel/cloudflared/*`. См. [`pterodactyl/README.md`](pterodactyl/README.md#cloudflare-tunnel-cloudflared--recommended).
+
 ### Прокси SOCKS5 и HTTP с инфраструктурой по пользователям
 Inbound'ы `mixed` (SOCKS5) и `http` в Xray используют тот же VLESS-подобный стек, что VLESS/VMess/Trojan/Shadowsocks: раскрывающаяся таблица клиентов с трафиком, сроком, квотой, лимитом IP и переключателем; автогенерация учётных данных (с возможностью пересоздать); статистика по пользователям через стандартные ключи трафика Xray, поэтому задания по квотам/сроку работают автоматически. Имя пользователя редактируется после создания без сброса счётчиков трафика.
 
@@ -95,7 +99,7 @@ AmneziaWG — это WireGuard с обфускацией пакетов, из-з
 | Бинарники | скачивает `install.sh` | Вшиты в Docker-образ |
 | WireGuard/AmneziaWG | ядро (`awg-quick`, TUN, iptables) | Встроенный userspace-движок, без root (`shared/wgengine`) |
 | fail2ban | включён | отключён (нет root) |
-| TLS | ACME HTTP-01 на :80/:443 | Загрузка сертификатов в `/home/container/cert` или DNS-01 |
+| TLS / доступ | ACME HTTP-01 на :80/:443 | **Cloudflare Tunnel** (встроенный, рекомендуется — HTTPS-хост без входящего порта) или загрузка сертификатов в `/home/container/cert` |
 
 Укажите **внешний адрес** (IP узла или домен) в настройках панели, чтобы клиентские ссылки и URL подписок формировались правильно — контейнер не может сам определить публичный адрес узла.
 
