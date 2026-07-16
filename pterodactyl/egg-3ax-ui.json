@@ -6,7 +6,7 @@
   },
   "exported_at": "2026-07-16T00:00:00+00:00",
   "name": "3AX-UI",
-  "author": "iomniksend@gmail.com",
+  "author": "iwebbio.dev@gmail.com",
   "description": "3AX-UI proxy panel (Xray VLESS/VMess/Trojan/Shadowsocks/SOCKS/HTTP, MTProto, and userspace AmneziaWG/WireGuard) packaged for Pterodactyl. Runs fully unprivileged: no root, no TUN, no capabilities.",
   "features": [],
   "docker_images": {
