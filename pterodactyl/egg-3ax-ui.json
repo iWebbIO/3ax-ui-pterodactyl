@@ -10,7 +10,7 @@
   "description": "3AX-UI proxy panel (Xray VLESS/VMess/Trojan/Shadowsocks/SOCKS/HTTP, MTProto, and userspace AmneziaWG/WireGuard) packaged for Pterodactyl. Runs fully unprivileged: no root, no TUN, no capabilities.",
   "features": [],
   "docker_images": {
-    "3AX-UI (latest)": "ghcr.io/iwebbio/3ax-ui-pterodactyl:latest"
+    "3AX-UI": "ghcr.io/iwebbio/3ax-ui-pterodactyl:latest"
   },
   "file_denylist": [],
   "startup": "/app/x-ui",

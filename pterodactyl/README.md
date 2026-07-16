@@ -29,6 +29,27 @@ docker buildx build -f pterodactyl/Dockerfile \
 If you push to a different registry/tag, update `docker_images` in
 `egg-3ax-ui.json` to match.
 
+> **Make the image pullable by your node.** GHCR marks new packages **private**,
+> so Wings pulling anonymously fails with `error from registry: denied`. Either:
+> - make it public — GitHub → your **Packages** → `3ax-ui-pterodactyl` → **Package
+>   settings** → **Change visibility → Public**; or
+> - keep it private and log the node's Docker in once:
+>   `docker login ghcr.io -u <user> -p <PAT-with-read:packages>` (Wings uses the
+>   host Docker's credentials).
+>
+> The image path is all-lowercase (`ghcr.io/iwebbio/...`) even if your GitHub name
+> is mixed-case.
+
+> **If `docker build` fails at the `wg_userspace` step** (the in-process
+> AmneziaWG/WireGuard engine is the one component compiled against fast-moving
+> gVisor/amneziawg-go APIs), build without it to get a working image now — the
+> panel, Xray protocols, MTProto and Cloudflare Tunnel all still work:
+> ```bash
+> docker buildx build -f pterodactyl/Dockerfile --build-arg WG_USERSPACE=0 \
+>   -t ghcr.io/iwebbio/3ax-ui-pterodactyl:latest --push .
+> ```
+> WireGuard/AmneziaWG inbounds simply won't start until the engine is compiled in.
+
 ## 2. Import the egg
 
 Pterodactyl admin → **Nests → Import Egg** → upload `pterodactyl/egg-3ax-ui.json`.

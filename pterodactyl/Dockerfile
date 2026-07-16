@@ -15,23 +15,30 @@
 FROM golang:1.26-alpine AS builder
 WORKDIR /app
 ARG TARGETARCH
+# WG_USERSPACE=1 (default) compiles the in-process AmneziaWG/WireGuard engine
+# (shared/wgengine, amneziawg-go + gVisor netstack) so tunnels run with no root,
+# no /dev/net/tun and no capabilities. Build with --build-arg WG_USERSPACE=0 to
+# skip it and get a guaranteed-compiling image (panel + Xray + MTProto +
+# cloudflared all still work; WireGuard/AmneziaWG inbounds just won't start).
+ARG WG_USERSPACE=1
 RUN apk add --no-cache build-base gcc git curl unzip bash tar
 
 COPY . .
 
-# Pull the userspace tunnel dependencies (amneziawg-go + gVisor netstack). These
-# are only needed for the `wg_userspace` build below, so they live outside the
-# committed go.mod; `go get` records them here where the network is available.
-# gVisor is versioned on its rolling "go" branch.
-RUN go get github.com/amnezia-vpn/amneziawg-go@latest gvisor.dev/gvisor@go
-
 # CGO is required for the SQLite driver; alpine => musl-linked binary that runs
-# directly on the alpine runtime stage below. The `wg_userspace` tag compiles the
-# in-process AmneziaWG/WireGuard engine (shared/wgengine) so tunnels run with no
-# root, no /dev/net/tun and no capabilities.
+# directly on the alpine runtime stage below.
 ENV CGO_ENABLED=1
 ENV CGO_CFLAGS="-D_LARGEFILE64_SOURCE"
-RUN go build -tags wg_userspace -ldflags "-w -s" -o build/x-ui main.go
+
+# The userspace tunnel deps (amneziawg-go + gVisor, gVisor on its rolling "go"
+# branch) live outside the committed go.mod; `go get` records them here where the
+# network is available, then we build with the tag. Skipped when WG_USERSPACE=0.
+RUN if [ "$WG_USERSPACE" = "1" ]; then \
+      go get github.com/amnezia-vpn/amneziawg-go@latest gvisor.dev/gvisor@go && \
+      go build -tags wg_userspace -ldflags "-w -s" -o build/x-ui main.go ; \
+    else \
+      go build -ldflags "-w -s" -o build/x-ui main.go ; \
+    fi
 
 # Xray-core + geo data — reuse the repo's own fetcher so filenames match exactly
 # what the panel looks up at runtime (bin/xray-linux-<fname>, geo*.dat).
