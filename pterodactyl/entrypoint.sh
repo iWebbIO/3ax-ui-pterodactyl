@@ -13,6 +13,11 @@ export XUI_LOG_FOLDER="/home/container/log"
 export XUI_BIN_FOLDER="/home/container/bin"
 export XUI_ENABLE_FAIL2BAN="false"   # needs root/iptables — unavailable here
 
+# Run AmneziaWG/WireGuard through the in-process userspace engine (no root, no
+# /dev/net/tun, no capabilities). The image is built with the `wg_userspace` tag
+# that compiles it in; override to "kernel" only on a privileged host.
+export XUI_WG_MODE="${XUI_WG_MODE:-userspace}"
+
 mkdir -p "$XUI_DB_FOLDER" "$XUI_LOG_FOLDER" "$XUI_BIN_FOLDER" /home/container/cert
 
 # --- Refresh immutable binaries from the image on every boot ---------------

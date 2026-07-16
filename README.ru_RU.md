@@ -35,13 +35,13 @@
 | **VLESS, VMess, Trojan, Shadowsocks** | ✅ Доступно | Все транспорты Xray: TCP, WS, gRPC, HTTPUpgrade, XHTTP, mKCP, QUIC — плюс **REALITY** и **XTLS** |
 | **SOCKS5 и HTTP** прокси | ✅ Доступно | Полная инфраструктура по пользователям (трафик, квоты, срок, лимит IP) |
 | **MTProto** (Telegram FakeTLS) | ✅ Доступно | `mtg-multi` (мультипользовательский) на amd64/arm64, одиночный `mtg` на прочих |
-| **AmneziaWG** (1.x и 2.0) | 🚧 Фаза 2 | Движок на netstack в userspace — обфускация сохранена, без root. См. план ниже |
-| **нативный WireGuard** | 🚧 Фаза 2 | Тот же userspace-движок |
+| **AmneziaWG** (1.x и 2.0) | ✅ Userspace¹ | Встроенный amneziawg-go + gVisor netstack — обфускация сохранена, без root |
+| **нативный WireGuard** | ✅ Userspace¹ | Тот же встроенный движок |
 | Нативный публичный IPv6 без NAT (NDP-прокси) | ❌ Не в Pterodactyl | Требует `CAP_NET_ADMIN` + маршрутизируемый префикс на хосте; трафик идёт через NAT |
 | Проброс портов по клиенту (iptables) | ❌ Не в Pterodactyl | Требует root/iptables внутри контейнера |
 | fail2ban | ❌ Отключён | Требует root/iptables |
 
-Всё на базе Xray и MTProto работает уже сейчас без привилегий. AmneziaWG / нативный WireGuard появятся в Фазе 2 через userspace-движок (дизайн в [`.ai/PTERODACTYL_EGG_PLAN.md`](.ai/PTERODACTYL_EGG_PLAN.md)).
+Всё работает без привилегий. ¹ AmneziaWG / нативный WireGuard используют **встроенный userspace-движок** (`amneziawg-go` + gVisor netstack, `shared/wgengine`), компилируемый в образ Pterodactyl через тег сборки `wg_userspace` — без модуля ядра и `/dev/net/tun`. Дизайн и замечания по сборке — в [`shared/wgengine/README.md`](shared/wgengine/README.md), полный план — в [`.ai/PTERODACTYL_EGG_PLAN.md`](.ai/PTERODACTYL_EGG_PLAN.md).
 
 ---
 
@@ -78,10 +78,10 @@ FakeTLS-прокси для Telegram, запускается как отдель
 ### Прокси SOCKS5 и HTTP с инфраструктурой по пользователям
 Inbound'ы `mixed` (SOCKS5) и `http` в Xray используют тот же VLESS-подобный стек, что VLESS/VMess/Trojan/Shadowsocks: раскрывающаяся таблица клиентов с трафиком, сроком, квотой, лимитом IP и переключателем; автогенерация учётных данных (с возможностью пересоздать); статистика по пользователям через стандартные ключи трафика Xray, поэтому задания по квотам/сроку работают автоматически. Имя пользователя редактируется после создания без сброса счётчиков трафика.
 
-### AmneziaWG и нативный WireGuard (Фаза 2)
+### AmneziaWG и нативный WireGuard (userspace)
 AmneziaWG — это WireGuard с обфускацией пакетов, из-за которой трафик неотличим от случайного шума (обходит DPI в России/Иране/Китае). На обычном хосте форк управляет им через ядро (`awg-quick` + iptables + NDP) — что невозможно в непривилегированном контейнере Pterodactyl.
 
-В Фазе 2 это заменяется **userspace-движком на netstack**: `amneziawg-go` / `wireguard-go` работают в самом процессе с сетевым стеком gVisor в userspace (без TUN-устройства, без capabilities), а встроенный форвардер выполняет NAT клиентских потоков в интернет — при желании через маршрутизацию Xray. Обфускация полностью сохраняется; компромисс — выдача нативного публичного IPv6 деградирует до NAT-исхода. Прогресс и дизайн — в [`.ai/PTERODACTYL_EGG_PLAN.md`](.ai/PTERODACTYL_EGG_PLAN.md).
+Форк добавляет **встроенный userspace-движок** (`shared/wgengine`): `amneziawg-go` ведёт протокол WireGuard/AmneziaWG на обычном UDP-сокете, его «TUN» — это сетевой стек gVisor в том же процессе, а форвардер TCP/UDP выполняет NAT клиентских потоков в интернет через обычные сокеты — без TUN-устройства и без capabilities. Обфускация полностью сохраняется; компромисс — недоступны выдача нативного публичного IPv6 (NDP) и проброс портов через iptables, а IPv6-исход идёт через NAT. Включается через `XUI_WG_MODE=userspace` и компилируется в образ с `-tags wg_userspace`. Дизайн и заметки по сборке: [`shared/wgengine/README.md`](shared/wgengine/README.md).
 
 ---
 
@@ -93,7 +93,7 @@ AmneziaWG — это WireGuard с обфускацией пакетов, из-з
 | Хранение | `/etc/x-ui`, `/var/log/x-ui`, `bin/` | Всё под `/home/container` через `XUI_DB_FOLDER` / `XUI_LOG_FOLDER` / `XUI_BIN_FOLDER` |
 | Порты | любые, включая привилегированные | Только **аллокации** сервера (высокие порты); панель на основной |
 | Бинарники | скачивает `install.sh` | Вшиты в Docker-образ |
-| WireGuard/AmneziaWG | ядро (`awg-quick`, TUN, iptables) | Userspace netstack, без root (Фаза 2) |
+| WireGuard/AmneziaWG | ядро (`awg-quick`, TUN, iptables) | Встроенный userspace-движок, без root (`shared/wgengine`) |
 | fail2ban | включён | отключён (нет root) |
 | TLS | ACME HTTP-01 на :80/:443 | Загрузка сертификатов в `/home/container/cert` или DNS-01 |
 
@@ -124,8 +124,8 @@ pterodactyl/
 | VLESS / VMess / Trojan / Shadowsocks | v2rayN, v2rayNG, Nekoray, sing-box, Streisand и др. | Все платформы |
 | SOCKS5 / HTTP | любой стандартный прокси-клиент | Все платформы |
 | MTProto | Telegram (встроенная поддержка прокси) | Все платформы |
-| AmneziaWG (Фаза 2) | AmneziaVPN — [amnezia.org](https://amnezia.org) | Android, iOS, Windows, macOS, Linux |
-| нативный WireGuard (Фаза 2) | Официальный WireGuard | Все платформы |
+| AmneziaWG | AmneziaVPN — [amnezia.org](https://amnezia.org) | Android, iOS, Windows, macOS, Linux |
+| нативный WireGuard | Официальный WireGuard | Все платформы |
 
 > Стандартные клиенты WireGuard **несовместимы** с AmneziaWG — они не поддерживают параметры обфускации.
 

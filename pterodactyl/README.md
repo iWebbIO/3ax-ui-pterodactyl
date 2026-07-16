@@ -7,12 +7,12 @@ prepares the server volume at install time.
 
 ## Status
 
-| Capability | Phase 1 (this) | Notes |
+| Capability | Status | Notes |
 |---|---|---|
 | Panel + subscriptions | ✅ | Web UI on the primary allocation |
 | Xray protocols (VLESS, VMess, Trojan, Shadowsocks, SOCKS, HTTP, all transports, REALITY, XTLS) | ✅ | Userspace — work as-is |
 | MTProto (`mtg` / `mtg-multi`) | ✅ | amd64/arm64 get multi-user; others single-secret |
-| AmneziaWG / native WireGuard | 🚧 Phase 2 | Userspace netstack engine (`WG_MODE=userspace`) — see `.ai/PTERODACTYL_EGG_PLAN.md` |
+| AmneziaWG / native WireGuard | ✅ userspace | In-process `amneziawg-go` + gVisor engine (`XUI_WG_MODE=userspace`, built with `-tags wg_userspace`). See [`../shared/wgengine/README.md`](../shared/wgengine/README.md) for build-verification notes. IPv6-via-NDP and iptables port-forwarding are kernel-only and unavailable here. |
 
 ## 1. Build & push the image
 
@@ -54,7 +54,7 @@ port <N>`, open `http://<node-ip>:<primary-port>/` and log in.
 - Pick a **port that is allocated to this server** — anything else is
   unreachable from outside.
 - WireGuard/AmneziaWG use **UDP**; Pterodactyl allocations cover TCP+UDP on the
-  same number, so an allocated port works for them too (Phase 2).
+  same number, so an allocated port works for them too.
 - Set the **external address** (node IP or domain) in the panel's settings so
   client links and subscription URLs resolve correctly — the container can't
   auto-detect the node's public address.

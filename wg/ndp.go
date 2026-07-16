@@ -36,6 +36,11 @@ var wgSectionRegex = regexp.MustCompile(`(?s)` + regexp.QuoteMeta(wgSectionBegin
 // ApplyNdppdConfig updates only the WG section in ndppd.conf, preserving other rules.
 // If the file doesn't exist or has no WG section, the section is appended.
 func ApplyNdppdConfig(externalIface, tunnelIface, ipv6Pool string) error {
+	if userspaceMode() {
+		// NDP proxy is a kernel/root feature; the userspace engine has no real
+		// interface to proxy for. IPv6 egress is NAT'd instead. No-op.
+		return nil
+	}
 	newSection := generateWgSection(externalIface, tunnelIface, ipv6Pool)
 
 	existing, err := os.ReadFile(ndppdConfigPath)
@@ -69,6 +74,9 @@ func ApplyNdppdConfig(externalIface, tunnelIface, ipv6Pool string) error {
 
 // StopNdppd removes the WG section from ndppd.conf and restarts (or stops) ndppd.
 func StopNdppd() {
+	if userspaceMode() {
+		return
+	}
 	existing, err := os.ReadFile(ndppdConfigPath)
 	if err != nil {
 		_ = exec.Command("systemctl", "stop", "ndppd").Run()
@@ -89,6 +97,9 @@ func StopNdppd() {
 
 // AddProxyNDP adds a single IPv6 NDP proxy entry (fallback method without ndppd).
 func AddProxyNDP(ipv6 string, externalIface string) error {
+	if userspaceMode() {
+		return nil
+	}
 	ip := ipam.StripMask(ipv6)
 	cmd := exec.Command("ip", "-6", "neigh", "add", "proxy", ip, "dev", externalIface)
 	output, err := cmd.CombinedOutput()
@@ -103,6 +114,9 @@ func AddProxyNDP(ipv6 string, externalIface string) error {
 
 // RemoveProxyNDP removes a single IPv6 NDP proxy entry.
 func RemoveProxyNDP(ipv6 string, externalIface string) error {
+	if userspaceMode() {
+		return nil
+	}
 	ip := ipam.StripMask(ipv6)
 	cmd := exec.Command("ip", "-6", "neigh", "del", "proxy", ip, "dev", externalIface)
 	output, err := cmd.CombinedOutput()

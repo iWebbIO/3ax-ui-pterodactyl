@@ -89,6 +89,28 @@ func GetBinFolderPath() string {
 	return binFolderPath
 }
 
+// GetWgMode returns the WireGuard/AmneziaWG engine mode from XUI_WG_MODE.
+//
+//	"kernel"    (default) — bring tunnels up via awg-quick/wg-quick + iptables.
+//	                        Requires root, /dev/net/tun and CAP_NET_ADMIN.
+//	"userspace" — run the tunnel entirely in-process (amneziawg-go/wireguard-go
+//	              over a gVisor netstack). No root, no TUN, no capabilities;
+//	              the mode used on Pterodactyl. Requires a build with the
+//	              `wg_userspace` tag (see shared/wgengine).
+func GetWgMode() string {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("XUI_WG_MODE")))
+	if mode == "" {
+		return "kernel"
+	}
+	return mode
+}
+
+// IsWgUserspace reports whether tunnels should run through the in-process
+// userspace engine instead of the kernel (awg-quick/wg-quick) path.
+func IsWgUserspace() bool {
+	return GetWgMode() == "userspace"
+}
+
 func getBaseDir() string {
 	exePath, err := os.Executable()
 	if err != nil {

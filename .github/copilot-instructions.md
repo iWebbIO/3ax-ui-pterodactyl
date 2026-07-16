@@ -5,7 +5,7 @@ This repo is **3AX-UI for Pterodactyl** — a fork of [coinman-dev/3ax-ui](https
 
 **Two areas of work:** (1) the shared **panel source** (`web/`, `xray/`, `awg/`, `wg/`, `mtproto/`, `sub/`, …) — keep changes minimal so the fork rebases cleanly on upstream; (2) the **Pterodactyl packaging** in `pterodactyl/`. The porting plan, decisions, and phase status live in `.ai/PTERODACTYL_EGG_PLAN.md` — read it before touching Pterodactyl-facing behavior.
 
-> Constraint reminder: kernel-dependent features (kernel AmneziaWG/WireGuard via `awg-quick`/`wg-quick`, iptables port-forwarding, NDP-proxy IPv6, fail2ban) **do not work** in an unprivileged Pterodactyl container. AmneziaWG/WireGuard are being reimplemented as a userspace netstack engine (Phase 2). Xray protocols and MTProto work as-is.
+> Constraint reminder: kernel-dependent features (iptables port-forwarding, NDP-proxy IPv6, fail2ban) **do not work** in an unprivileged Pterodactyl container. AmneziaWG/WireGuard run through an **in-process userspace engine** (`shared/wgengine`: amneziawg-go + gVisor netstack) selected by `XUI_WG_MODE=userspace` and compiled with `-tags wg_userspace`; the kernel `awg-quick`/`wg-quick` path stays the default for VPS builds. Xray protocols and MTProto work as-is.
 
 ## Architecture
 

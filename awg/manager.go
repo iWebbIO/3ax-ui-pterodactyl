@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/coinman-dev/3ax-ui/v2/logger"
+	"github.com/coinman-dev/3ax-ui/v2/shared/wgengine"
 )
 
 const (
@@ -28,8 +29,14 @@ type PeerStatus struct {
 	PersistentKeepalive int    `json:"persistentKeepalive"`
 }
 
-// WriteServerConfig writes the config string to the awg config file.
+// WriteServerConfig writes the config string to the awg config file. In
+// userspace mode nothing is written to /etc (unwritable, and unused); the config
+// is cached so InterfaceUp can hand it to the in-process engine.
 func WriteServerConfig(interfaceName string, config string) error {
+	if userspaceMode() {
+		lastConf.Store(interfaceName, config)
+		return nil
+	}
 	dir := DefaultConfigDir
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
@@ -46,14 +53,23 @@ func WriteServerConfig(interfaceName string, config string) error {
 
 // RemoveServerConfig deletes the config file for the given interface from disk.
 func RemoveServerConfig(interfaceName string) {
+	if userspaceMode() {
+		lastConf.Delete(interfaceName)
+		_ = wgengine.Down(interfaceName)
+		return
+	}
 	path := filepath.Join(DefaultConfigDir, interfaceName+".conf")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		logger.Warning("Failed to remove AWG config file:", err)
 	}
 }
 
-// InterfaceUp brings the AmneziaWG interface up using awg-quick.
+// InterfaceUp brings the AmneziaWG interface up using awg-quick (kernel mode) or
+// the in-process userspace engine (userspace mode).
 func InterfaceUp(interfaceName string) error {
+	if userspaceMode() {
+		return wgengine.Up(interfaceName, storedConf(interfaceName))
+	}
 	configPath := filepath.Join(DefaultConfigDir, interfaceName+".conf")
 	cmd := exec.Command("awg-quick", "up", configPath)
 	output, err := cmd.CombinedOutput()
@@ -66,6 +82,9 @@ func InterfaceUp(interfaceName string) error {
 
 // InterfaceDown takes the AmneziaWG interface down.
 func InterfaceDown(interfaceName string) error {
+	if userspaceMode() {
+		return wgengine.Down(interfaceName)
+	}
 	configPath := filepath.Join(DefaultConfigDir, interfaceName+".conf")
 	cmd := exec.Command("awg-quick", "down", configPath)
 	output, err := cmd.CombinedOutput()
@@ -78,6 +97,9 @@ func InterfaceDown(interfaceName string) error {
 
 // SyncConfig applies config changes without dropping existing connections.
 func SyncConfig(interfaceName string) error {
+	if userspaceMode() {
+		return wgengine.Reload(interfaceName, storedConf(interfaceName))
+	}
 	configPath := filepath.Join(DefaultConfigDir, interfaceName+".conf")
 
 	// Strip the config to get only the interface section for syncconf
@@ -109,6 +131,9 @@ func RestartInterface(interfaceName string) error {
 
 // IsInterfaceUp checks if the awg interface exists in the system.
 func IsInterfaceUp(interfaceName string) bool {
+	if userspaceMode() {
+		return wgengine.Running(interfaceName)
+	}
 	cmd := exec.Command("awg", "show", interfaceName)
 	err := cmd.Run()
 	return err == nil
@@ -119,6 +144,13 @@ func IsInterfaceUp(interfaceName string) bool {
 // Line 1 (interface): private-key listen-port fwmark
 // Line 2+ (peers): public-key preshared-key endpoint allowed-ips latest-handshake transfer-rx transfer-tx persistent-keepalive
 func GetPeerStats(interfaceName string) ([]PeerStatus, error) {
+	if userspaceMode() {
+		stats, err := wgengine.Stats(interfaceName)
+		if err != nil {
+			return nil, err
+		}
+		return toPeerStatus(stats), nil
+	}
 	cmd := exec.Command("awg", "show", interfaceName, "dump")
 	output, err := cmd.Output()
 	if err != nil {
@@ -158,8 +190,12 @@ func GetPeerStats(interfaceName string) ([]PeerStatus, error) {
 	return peers, nil
 }
 
-// IsAwgInstalled checks if the awg and awg-quick binaries are available.
+// IsAwgInstalled checks if the awg and awg-quick binaries are available. In
+// userspace mode the engine is compiled in, so it is always "installed".
 func IsAwgInstalled() bool {
+	if userspaceMode() {
+		return true
+	}
 	_, err1 := exec.LookPath("awg")
 	_, err2 := exec.LookPath("awg-quick")
 	return err1 == nil && err2 == nil
@@ -179,6 +215,9 @@ const awg20ReleaseDate = 20250901
 // /sys/module/amneziawg/version (e.g. "1.0.20251009"); we derive the protocol
 // generation from its build date and report "2.0.<date>" / "1.x.<date>".
 func GetAwgVersion() string {
+	if userspaceMode() {
+		return "userspace (amneziawg-go)"
+	}
 	if mod := awgModuleVersion(); mod != "" {
 		switch date := awgVersionDate(mod); {
 		case date >= awg20ReleaseDate:
