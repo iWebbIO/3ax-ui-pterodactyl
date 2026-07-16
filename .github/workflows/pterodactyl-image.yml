@@ -1,0 +1,100 @@
+name: Build 3AX-UI Pterodactyl image
+
+# Builds pterodactyl/Dockerfile and pushes it to
+# ghcr.io/<owner>/3ax-ui-pterodactyl:latest — the image the egg pulls.
+#
+# It first tries the full build with the userspace WireGuard/AmneziaWG engine
+# (-tags wg_userspace, amneziawg-go + gVisor). Because that engine is compiled
+# against fast-moving APIs, if it fails the workflow automatically falls back to
+# a WG_USERSPACE=0 build so a working image (panel + Xray + MTProto + Cloudflare
+# Tunnel) is always published.
+
+on:
+  workflow_dispatch:
+    inputs:
+      wg_userspace:
+        description: "Compile the userspace WireGuard/AmneziaWG engine"
+        type: choice
+        options: ["1", "0"]
+        default: "1"
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - ".ai/**"
+      - "media/**"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ptero-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image ref (lowercase owner)
+        id: img
+        run: echo "ref=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/3ax-ui-pterodactyl" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 1) Full build with the userspace WG/AWG engine. Non-fatal so the fallback
+      #    can still publish a working image if this fails to compile.
+      - name: Build & push (with userspace WG engine)
+        id: full
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.wg_userspace == '1' }}
+        continue-on-error: true
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: pterodactyl/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            WG_USERSPACE=1
+          tags: ${{ steps.img.outputs.ref }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 2) Fallback / explicit safe build. Runs when the user picks 0, or when the
+      #    full build above failed.
+      - name: Build & push (safe — no userspace WG engine)
+        if: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.wg_userspace == '0') || steps.full.outcome == 'failure' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: pterodactyl/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            WG_USERSPACE=0
+          tags: ${{ steps.img.outputs.ref }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          {
+            echo "### 3AX-UI Pterodactyl image"
+            echo ""
+            echo "Pushed \`${{ steps.img.outputs.ref }}:latest\`"
+            if [ "${{ steps.full.outcome }}" = "failure" ]; then
+              echo ""
+              echo "> ⚠️ The userspace WG/AWG engine failed to compile — published the **safe** image (WG_USERSPACE=0). WireGuard/AmneziaWG inbounds won't start until that's fixed; everything else works."
+            fi
+            echo ""
+            echo "**Next:** if the package is private, make it public (GitHub → Packages → 3ax-ui-pterodactyl → visibility) or \`docker login ghcr.io\` on the node. Then start the server."
+          } >> "$GITHUB_STEP_SUMMARY"
