@@ -1,0 +1,83 @@
+{{define "settings/panel/cloudflared"}}
+<a-collapse default-active-key="1">
+    <a-collapse-panel key="1" header="Cloudflare Tunnel">
+        <a-alert v-if="!cf.installed" type="warning" show-icon :style="{ marginBottom: '16px' }"
+            message="cloudflared binary was not found in the bin folder — the tunnel cannot start.">
+        </a-alert>
+
+        <a-alert v-if="cf.envManaged" type="info" show-icon :style="{ marginBottom: '16px' }"
+            message="This tunnel is configured by XUI_CF_* environment variables, which override the settings below.">
+        </a-alert>
+
+        <a-list-item :style="{ padding: '10px 20px' }">
+            <a-row :gutter="[8,16]" :style="{ width: '100%' }">
+                <a-col :lg="24" :xl="12"><b>Status</b></a-col>
+                <a-col :lg="24" :xl="12">
+                    <a-tag :color="cf.status.running ? 'green' : 'default'">
+                        [[ cf.status.running ? 'Running' : 'Stopped' ]]
+                    </a-tag>
+                    <span v-if="cf.status.version" :style="{ opacity: .65 }">cloudflared [[ cf.status.version ]]</span>
+                </a-col>
+            </a-row>
+        </a-list-item>
+
+        <a-list-item v-if="cf.status.publicUrl" :style="{ padding: '10px 20px' }">
+            <a-row :gutter="[8,16]" :style="{ width: '100%' }">
+                <a-col :lg="24" :xl="12"><b>Public URL</b></a-col>
+                <a-col :lg="24" :xl="12">
+                    <a :href="cf.status.publicUrl" target="_blank" rel="noopener">[[ cf.status.publicUrl ]]</a>
+                </a-col>
+            </a-row>
+        </a-list-item>
+
+        <a-list-item v-if="cf.status.lastLog" :style="{ padding: '10px 20px' }">
+            <a-row :gutter="[8,16]" :style="{ width: '100%' }">
+                <a-col :lg="24" :xl="12"><b>Last log</b></a-col>
+                <a-col :lg="24" :xl="12"><code :style="{ fontSize: '12px' }">[[ cf.status.lastLog ]]</code></a-col>
+            </a-row>
+        </a-list-item>
+
+        <a-setting-list-item paddings="small">
+            <template #title>Enable Cloudflare Tunnel</template>
+            <template #description>Expose a local service over an HTTPS hostname with no inbound port — Cloudflare
+                terminates TLS.</template>
+            <template #control><a-switch v-model="cf.settings.enable"></a-switch></template>
+        </a-setting-list-item>
+
+        <a-setting-list-item paddings="small">
+            <template #title>Mode</template>
+            <template #description>Quick: instant *.trycloudflare.com URL (no account). Token: a named tunnel on your
+                own domain via Cloudflare Zero Trust.</template>
+            <template #control>
+                <a-select v-model="cf.settings.mode" :dropdown-class-name="themeSwitcher.currentTheme"
+                    :style="{ width: '100%' }">
+                    <a-select-option value="quick">Quick (trycloudflare.com)</a-select-option>
+                    <a-select-option value="token">Token (named tunnel)</a-select-option>
+                </a-select>
+            </template>
+        </a-setting-list-item>
+
+        <a-setting-list-item paddings="small" v-if="cf.settings.mode === 'token'">
+            <template #title>Connector token</template>
+            <template #description>From Cloudflare Zero Trust → Networks → Tunnels. Set the tunnel's public hostname
+                to point at http://127.0.0.1:&lt;panel port&gt;.</template>
+            <template #control><a-input-password v-model="cf.settings.token"
+                    placeholder="eyJhIjoi..."></a-input-password></template>
+        </a-setting-list-item>
+
+        <a-setting-list-item paddings="small" v-else>
+            <template #title>Target URL</template>
+            <template #description>Local service to expose. Leave blank to expose the panel itself
+                (http://127.0.0.1:&lt;panel port&gt;).</template>
+            <template #control><a-input v-model="cf.settings.target"
+                    placeholder="http://127.0.0.1:2053"></a-input></template>
+        </a-setting-list-item>
+
+        <a-space :style="{ marginTop: '16px' }">
+            <a-button type="primary" :loading="cf.loading" @click="saveCloudflared">Save &amp; Apply</a-button>
+            <a-button :loading="cf.loading" @click="restartCloudflared">Restart</a-button>
+            <a-button @click="getCloudflared">Refresh</a-button>
+        </a-space>
+    </a-collapse-panel>
+</a-collapse>
+{{end}}

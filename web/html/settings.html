@@ -87,6 +87,13 @@
                     </template>
                     {{ template "settings/panel/subscription/json" . }}
                   </a-tab-pane>
+                  <a-tab-pane key="6" :style="{ paddingTop: '20px' }">
+                    <template #tab>
+                      <a-icon type="cloud"></a-icon>
+                      <span>Cloudflare</span>
+                    </template>
+                    {{ template "settings/panel/cloudflared" . }}
+                  </a-tab-pane>
                 </a-tabs>
               </a-col>
             </a-row>
@@ -118,6 +125,13 @@
       oldAllSetting: new AllSetting(),
       allSetting: new AllSetting(),
       saveBtnDisable: true,
+      cf: {
+        installed: true,
+        envManaged: false,
+        loading: false,
+        settings: { enable: false, mode: 'quick', token: '', target: '' },
+        status: { running: false, publicUrl: '', version: '', lastLog: '' },
+      },
       entryHost: null,
       entryPort: null,
       entryProtocol: null,
@@ -331,6 +345,32 @@
         this.loading(false);
         if (msg.success) {
           await this.getAllSetting();
+        }
+      },
+      async getCloudflared() {
+        const msg = await HttpUtil.get("/panel/cloudflared/status");
+        if (msg.success && msg.obj) {
+          const o = msg.obj;
+          this.cf.installed = o.installed;
+          this.cf.envManaged = !!o.envManaged;
+          this.cf.settings = { enable: !!o.enable, mode: o.mode || 'quick', token: o.token || '', target: o.target || '' };
+          this.cf.status = { running: !!o.running, publicUrl: o.publicUrl || '', version: o.version || '', lastLog: o.lastLog || '' };
+        }
+      },
+      async saveCloudflared() {
+        this.cf.loading = true;
+        const msg = await HttpUtil.post("/panel/cloudflared/update", this.cf.settings);
+        this.cf.loading = false;
+        if (msg.success) {
+          await this.getCloudflared();
+        }
+      },
+      async restartCloudflared() {
+        this.cf.loading = true;
+        const msg = await HttpUtil.post("/panel/cloudflared/restart");
+        this.cf.loading = false;
+        if (msg.success) {
+          await this.getCloudflared();
         }
       },
       async updateUser() {
@@ -711,6 +751,7 @@
       this.entryIsIP = this._isIp(this.entryHost);
       await this.getAllSetting();
       await this.loadInboundTags();
+      await this.getCloudflared();
       while (true) {
         await PromiseUtil.sleep(1000);
         this.saveBtnDisable = this.oldAllSetting.equals(this.allSetting);

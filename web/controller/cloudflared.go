@@ -35,9 +35,46 @@ func (a *CloudflaredController) initRouter(g *gin.RouterGroup) {
 	g.POST("/restart", a.restart)
 }
 
-// status returns the live tunnel state (running, public URL, version, last log).
+// cfStatusResponse merges the live tunnel state with the stored form settings so
+// the panel's Cloudflare tab can render status and populate its inputs in one call.
+type cfStatusResponse struct {
+	// Runtime
+	Running   bool   `json:"running"`
+	Installed bool   `json:"installed"`
+	PublicURL string `json:"publicUrl"`
+	Version   string `json:"version"`
+	LastLog   string `json:"lastLog"`
+	// Stored settings (form values)
+	Enable bool   `json:"enable"`
+	Mode   string `json:"mode"`
+	Token  string `json:"token"`
+	Target string `json:"target"`
+	// True when XUI_CF_* env vars override the stored settings.
+	EnvManaged bool `json:"envManaged"`
+}
+
+// status returns the live tunnel state plus the stored settings for the UI form.
 func (a *CloudflaredController) status(c *gin.Context) {
-	jsonObj(c, cloudflared.GetManager().Status(), nil)
+	st := cloudflared.GetManager().Status()
+	enable, _ := a.settingService.GetCfTunnelEnable()
+	mode, _ := a.settingService.GetCfTunnelMode()
+	token, _ := a.settingService.GetCfTunnelToken()
+	target, _ := a.settingService.GetCfTunnelTarget()
+	if mode == "" {
+		mode = "quick"
+	}
+	jsonObj(c, cfStatusResponse{
+		Running:    st.Running,
+		Installed:  st.Installed,
+		PublicURL:  st.PublicURL,
+		Version:    st.Version,
+		LastLog:    st.LastLog,
+		Enable:     enable,
+		Mode:       mode,
+		Token:      token,
+		Target:     target,
+		EnvManaged: cloudflared.EnvManaged(),
+	}, nil)
 }
 
 // update persists the tunnel settings and reconciles the running process.

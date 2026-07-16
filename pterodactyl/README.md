@@ -77,7 +77,9 @@ Networks → Tunnels** dashboard, create a tunnel, add a **public hostname** rou
 `panel.example.com` → `http://127.0.0.1:<panel port>`, copy the connector token,
 and set the egg variable **`XUI_CF_TOKEN=<token>`** (this auto-enables token mode).
 
-Env variables (also editable via the panel API at `/panel/cloudflared/*`):
+Or configure it in the panel: **Settings → Cloudflare** (enable, mode, token/target, live status + the quick-tunnel URL, Save/Restart).
+
+Env variables (env wins over the panel settings when set):
 
 | Variable | Meaning |
 |---|---|

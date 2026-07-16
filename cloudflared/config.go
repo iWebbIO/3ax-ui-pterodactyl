@@ -112,6 +112,17 @@ func (c Config) fingerprint() string {
 	return fmt.Sprintf("%v|%s|%s|%s", c.Enabled, c.Mode, c.Token, c.Target)
 }
 
+// EnvManaged reports whether any XUI_CF_* override is set in the environment. The
+// UI uses this to warn that env variables take precedence over panel settings.
+func EnvManaged() bool {
+	for _, k := range []string{EnvEnable, EnvMode, EnvToken, EnvTarget} {
+		if _, ok := os.LookupEnv(k); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func isTruthy(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "1", "true", "yes", "on":
