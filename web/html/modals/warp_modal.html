@@ -138,16 +138,24 @@
                         tag: 'warp',
                         protocol: Protocols.Wireguard,
                         settings: {
-                            mtu: 1420,
+                            // Cloudflare WARP requires MTU 1280 — at 1420 the handshake
+                            // succeeds but data stalls (path-MTU drops), which looks like
+                            // "connected but no ping".
+                            mtu: 1280,
                             secretKey: warpModal.warpData.private_key,
                             address: this.getAddresses(config.interface.addresses),
                             reserved: this.getResolved(config.client_id),
-                            domainStrategy: 'ForceIP',
+                            // Resolve the Cloudflare endpoint over IPv4 — Pterodactyl
+                            // containers usually have no IPv6 egress, and ForceIP can
+                            // otherwise pick an unreachable AAAA and fail the handshake.
+                            domainStrategy: 'ForceIPv4',
                             peers: [{
                                 publicKey: peer.public_key,
                                 endpoint: peer.endpoint.host,
                             }],
-                            noKernelTun: false,
+                            // Userspace WireGuard (gVisor) — the only mode that works
+                            // unprivileged in a Pterodactyl container (no /dev/net/tun).
+                            noKernelTun: true,
                         }
                     });
                 }
