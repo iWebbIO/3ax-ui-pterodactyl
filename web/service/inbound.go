@@ -221,6 +221,27 @@ func (s *InboundService) checkEmailExistForInbound(inbound *model.Inbound) (stri
 // It validates port uniqueness, client email uniqueness, and required fields,
 // then saves the inbound to the database and optionally adds it to the running Xray instance.
 // Returns the created inbound, whether Xray needs restart, and any error.
+// validateProtocolSettings rejects inbound settings that Xray would refuse,
+// BEFORE they are saved. Xray validates its whole config atomically, so a single
+// malformed inbound (e.g. a Shadowsocks inbound with an empty cipher) makes the
+// core refuse to start and takes down every other inbound with it. Catching it
+// here turns that silent, total outage into a clear per-inbound error.
+func validateProtocolSettings(inbound *model.Inbound) error {
+	if inbound.Protocol != model.Shadowsocks {
+		return nil
+	}
+	var ss struct {
+		Method string `json:"method"`
+	}
+	if err := json.Unmarshal([]byte(inbound.Settings), &ss); err != nil {
+		return common.NewError("Invalid Shadowsocks settings: ", err)
+	}
+	if strings.TrimSpace(ss.Method) == "" {
+		return common.NewError("Shadowsocks requires an encryption method — pick a cipher before saving (an empty method makes Xray refuse to start and disables all inbounds)")
+	}
+	return nil
+}
+
 func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, bool, error) {
 	// AmneziaWG inbounds are managed separately — just save the DB record
 	if inbound.Protocol == model.AmneziaWG {
@@ -236,6 +257,10 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 	// let the reconcile job start mtg. They never enter the Xray config.
 	if inbound.Protocol == model.MTProto {
 		return s.addMtprotoInbound(inbound)
+	}
+
+	if err := validateProtocolSettings(inbound); err != nil {
+		return inbound, false, err
 	}
 
 	exist, err := s.checkPortExist(inbound.Listen, inbound.Port, 0)
@@ -827,6 +852,10 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 	// let the reconcile job restart mtg. They never enter the Xray config.
 	if inbound.Protocol == model.MTProto {
 		return s.updateMtprotoInbound(inbound)
+	}
+
+	if err := validateProtocolSettings(inbound); err != nil {
+		return inbound, false, err
 	}
 
 	exist, err := s.checkPortExist(inbound.Listen, inbound.Port, inbound.Id)

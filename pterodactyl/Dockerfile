@@ -47,6 +47,17 @@ RUN ./DockerInit.sh "${TARGETARCH}"
 # MTProto sidecars (mtg / mtg-multi). Non-fatal if unavailable for the arch.
 RUN bash pterodactyl/fetch-bins.sh "${TARGETARCH}" build/bin
 
+# Fail the build loudly if the essential binaries didn't download. DockerInit.sh /
+# fetch-bins.sh are non-fatal (a transient download failure returns 0), which
+# could otherwise ship a "working" image whose Xray never starts — exactly the
+# kind of silent breakage that makes every inbound dead while the panel is fine.
+RUN set -e; \
+    echo "=== baked bin/ contents ==="; ls -la build/bin; \
+    ls build/bin/xray-linux-* >/dev/null 2>&1 || { echo "FATAL: xray-core binary missing — aborting build"; exit 1; }; \
+    ls build/bin/geoip.dat build/bin/geosite.dat >/dev/null 2>&1 || { echo "FATAL: geo data missing — aborting build"; exit 1; }; \
+    ls build/bin/mtg-linux-* build/bin/mtg-multi-linux-* >/dev/null 2>&1 || echo "WARN: no mtg/mtg-multi — MTProto inbounds will not start"; \
+    ls build/bin/cloudflared-linux-* >/dev/null 2>&1 || echo "WARN: no cloudflared — Cloudflare Tunnel disabled"
+
 # -------- Stage: minimal unprivileged runtime --------
 FROM alpine:3.20
 LABEL org.opencontainers.image.title="3AX-UI (Pterodactyl)" \
