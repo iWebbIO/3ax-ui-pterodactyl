@@ -63,6 +63,13 @@ jobs:
           file: pterodactyl/Dockerfile
           platforms: linux/amd64
           push: true
+          # Publish a plain single-arch Docker manifest. Buildx otherwise attaches
+          # provenance/SBOM attestations, turning the push into an OCI image index
+          # (with an unknown/unknown entry) that OLDER Docker/containerd daemons —
+          # e.g. an out-of-date Wings node — can fail to pull. Disabling them keeps
+          # the image pullable everywhere.
+          provenance: false
+          sbom: false
           build-args: |
             WG_USERSPACE=1
           tags: ${{ steps.img.outputs.ref }}:latest
@@ -79,6 +86,10 @@ jobs:
           file: pterodactyl/Dockerfile
           platforms: linux/amd64
           push: true
+          # Same as above: plain single-arch manifest, no attestations, so even an
+          # older Docker daemon on an out-of-date Wings node can pull the image.
+          provenance: false
+          sbom: false
           build-args: |
             WG_USERSPACE=0
           tags: ${{ steps.img.outputs.ref }}:latest
