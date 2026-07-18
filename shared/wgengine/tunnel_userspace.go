@@ -316,15 +316,20 @@ func installForwarders(s *stack.Stack) {
 	})
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 
-	udpFwd := udp.NewForwarder(s, func(r *udp.ForwarderRequest) {
+	// gVisor's UDP forwarder handler returns a bool ("was this request
+	// handled") and gonet.NewUDPConn no longer takes the *stack.Stack — both
+	// changed in recent netstack. We always consume the request (return true);
+	// on endpoint-creation failure we just drop it rather than emit ICMP.
+	udpFwd := udp.NewForwarder(s, func(r *udp.ForwarderRequest) bool {
 		id := r.ID()
 		var wq waiter.Queue
 		ep, err := r.CreateEndpoint(&wq)
 		if err != nil {
-			return
+			return true
 		}
-		local := gonet.NewUDPConn(s, &wq, ep)
+		local := gonet.NewUDPConn(&wq, ep)
 		go proxyUDP(local, endpointAddr(id.LocalAddress, id.LocalPort))
+		return true
 	})
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
 }

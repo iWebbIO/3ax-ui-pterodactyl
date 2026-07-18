@@ -30,11 +30,21 @@ COPY . .
 ENV CGO_ENABLED=1
 ENV CGO_CFLAGS="-D_LARGEFILE64_SOURCE"
 
-# The userspace tunnel deps (amneziawg-go + gVisor, gVisor on its rolling "go"
-# branch) live outside the committed go.mod; `go get` records them here where the
-# network is available, then we build with the tag. Skipped when WG_USERSPACE=0.
+# The userspace tunnel deps (amneziawg-go + gVisor) live outside the committed
+# go.mod; `go get` records them here where the network is available, then we
+# build with the tag. Skipped when WG_USERSPACE=0.
+#
+# These are PINNED, not floating. gVisor's "go" branch is a moving target whose
+# netstack API drifts (e.g. udp.NewForwarder's handler gained a bool return and
+# gonet.NewUDPConn dropped its *stack.Stack arg between the Jan and Jul 2026
+# snapshots) — a floating `@go`/`@latest` means an unrelated push can silently
+# break the userspace compile and quietly ship the WG_USERSPACE=0 fallback. The
+# engine in shared/wgengine is written against exactly these versions; bump them
+# deliberately (and adjust the code) rather than tracking the branch.
+ARG AWG_VERSION=v1.0.4
+ARG GVISOR_VERSION=v0.0.0-20260717235516-4f55f3833ba5
 RUN if [ "$WG_USERSPACE" = "1" ]; then \
-      go get github.com/amnezia-vpn/amneziawg-go@latest gvisor.dev/gvisor@go && \
+      go get github.com/amnezia-vpn/amneziawg-go@${AWG_VERSION} gvisor.dev/gvisor@${GVISOR_VERSION} && \
       go build -tags wg_userspace -ldflags "-w -s" -o build/x-ui main.go ; \
     else \
       go build -ldflags "-w -s" -o build/x-ui main.go ; \
